@@ -33,17 +33,15 @@
   }
   let root = $state<HTMLElement>();
   let content = $state<HTMLElement>();
-  let stepScroll = $state<HTMLElement>();
   let diffScroll = $state<HTMLElement>();
 
   const layoutKey = 'trace:layout:v1';
-  const defaults = { h: 100 / 3, v: 30, graphCollapsed: false, stepCollapsed: false };
+  const defaults = { h: 100 / 3, graphCollapsed: false, stepCollapsed: false };
   let layout = $state({ ...defaults });
   let ready = $state(false);
   let desktop = $state(false);
   let width = $state(1200);
   let graphPane = $state<{ resize(size: number): void }>();
-  let stepPane = $state<{ resize(size: number): void }>();
   let saving = false;
   let minGraph = $derived(Math.min(45, Math.max(8, (240 / Math.max(width, 480)) * 100)));
   let minContent = $derived(Math.min(45, Math.max(8, (240 / Math.max(width, 480)) * 100)));
@@ -58,7 +56,7 @@
       const stored = JSON.parse(localStorage.getItem(layoutKey) ?? 'null');
       if (!stored || typeof stored !== 'object') return;
       const size = (value: unknown, fallback: number, min: number, max: number) => typeof value === 'number' && value >= min && value <= max ? value : fallback;
-      layout = { h: size(stored.h, defaults.h, 8, 70), v: size(stored.v, defaults.v, 5, 80),
+      layout = { h: size(stored.h, defaults.h, 8, 70),
         graphCollapsed: stored.graphCollapsed === true, stepCollapsed: stored.stepCollapsed === true };
     } catch { /* ignore unreadable layout */ }
   }
@@ -67,7 +65,6 @@
     persist();
   }
   const horizontalChange = (sizes: number[]) => { if (saving && sizes.length === 2) { layout.h = sizes[0]; persist(); } };
-  const verticalChange = (sizes: number[]) => { if (saving && sizes.length === 2) { layout.v = sizes[0]; persist(); } };
 
   onMount(() => {
     restore();
@@ -81,8 +78,8 @@
     return () => { query.removeEventListener('change', sync); clearTimeout(timer); };
   });
 
-  const handleProps = (label: string, orientation: 'horizontal' | 'vertical', value: number) =>
-    ({ 'aria-label': label, 'aria-orientation': orientation === 'horizontal' ? 'vertical' : 'horizontal', 'aria-valuenow': Math.round(value), 'aria-valuemin': 0, 'aria-valuemax': 100 }) as const;
+  const handleProps = (label: string, value: number) =>
+    ({ 'aria-label': label, 'aria-orientation': 'vertical', 'aria-valuenow': Math.round(value), 'aria-valuemin': 0, 'aria-valuemax': 100 }) as const;
 
   // Branch memory lives only in the browser tab: where the user came from and which branch they last took at a fork.
   const memories = new Map<string, Required<NavMemory>>();
@@ -129,7 +126,7 @@
 
   $effect(() => {
     void data.stepNumber;
-    for (const node of [content, root, stepScroll, diffScroll]) if (node) node.scrollTop = 0;
+    for (const node of [content, root, diffScroll]) if (node) node.scrollTop = 0;
   });
 </script>
 
@@ -245,7 +242,7 @@
     {:else}
       <ResizablePaneGroup direction="horizontal" onLayoutChange={horizontalChange}>
         <ResizablePane bind:this={graphPane} defaultSize={layout.h} minSize={minGraph} order={1} id="graph-pane">{@render graphAside(true)}</ResizablePane>
-        <ResizableHandle id="graph-handle" ondblclick={() => graphPane?.resize(defaults.h)} {...handleProps('Resize workflow pane', 'horizontal', layout.h)} />
+        <ResizableHandle id="graph-handle" ondblclick={() => graphPane?.resize(defaults.h)} {...handleProps('Resize workflow pane', layout.h)} />
         <ResizablePane minSize={minContent} order={2} id="content-pane">{@render contentPanes()}</ResizablePane>
       </ResizablePaneGroup>
     {/if}
@@ -260,22 +257,14 @@
 {/if}
 
 {#snippet contentPanes()}
-  {#if layout.stepCollapsed}
-    <div class="flex h-full flex-col gap-2 p-3">
+  <div class="flex h-full flex-col gap-2 p-3">
+    {#if layout.stepCollapsed}
       {@render collapsedStep()}
-      <div class="min-h-0 flex-1 overflow-auto" bind:this={diffScroll}>{@render diffPanel()}</div>
-    </div>
-  {:else}
-    <ResizablePaneGroup direction="vertical" onLayoutChange={verticalChange}>
-      <ResizablePane bind:this={stepPane} defaultSize={layout.v} minSize={8} order={1} id="step-pane">
-        <div class="h-full overflow-auto p-3 pb-1.5" bind:this={stepScroll}>{@render stepPanel(true)}</div>
-      </ResizablePane>
-      <ResizableHandle id="step-handle" ondblclick={() => stepPane?.resize(defaults.v)} {...handleProps('Resize step panel', 'vertical', layout.v)} />
-      <ResizablePane minSize={15} order={2} id="diff-pane">
-        <div class="h-full overflow-auto p-3 pt-1.5" bind:this={diffScroll}>{@render diffPanel()}</div>
-      </ResizablePane>
-    </ResizablePaneGroup>
-  {/if}
+    {:else}
+      <div class="max-h-[45%] shrink-0 overflow-auto">{@render stepPanel(true)}</div>
+    {/if}
+    <div class="diff-fill min-h-0 flex-1" bind:this={diffScroll}>{@render diffPanel()}</div>
+  </div>
 {/snippet}
 
 <style>
@@ -283,15 +272,14 @@
   .rail-label { writing-mode: vertical-rl; transform: rotate(180deg); }
   :global([data-slot='resizable-handle']) { position: relative; flex: none; background: var(--line); transition: background-color 0.15s; }
   :global([data-slot='resizable-handle'][data-direction='horizontal']) { width: 1px; }
-  :global([data-slot='resizable-handle'][data-direction='vertical']) { height: 1px; }
   :global([data-slot='resizable-handle']::before) { content: ''; position: absolute; inset: 0; }
   :global([data-slot='resizable-handle'][data-direction='horizontal']::before) { left: -3px; right: -3px; }
-  :global([data-slot='resizable-handle'][data-direction='vertical']::before) { top: -3px; bottom: -3px; }
   :global([data-slot='resizable-handle']::after) { content: ''; position: absolute; left: 50%; top: 50%; translate: -50% -50%; border-radius: 2px; background: var(--muted-fg); opacity: 0.55; transition: background-color 0.15s, opacity 0.15s; }
   :global([data-slot='resizable-handle'][data-direction='horizontal']::after) { width: 3px; height: 22px; }
-  :global([data-slot='resizable-handle'][data-direction='vertical']::after) { width: 22px; height: 3px; }
   :global([data-slot='resizable-handle']:hover), :global([data-slot='resizable-handle']:focus-visible), :global([data-slot='resizable-handle'][data-active]) { background: var(--a-cyan); outline: none; }
   :global([data-slot='resizable-handle']:hover::after), :global([data-slot='resizable-handle']:focus-visible::after), :global([data-slot='resizable-handle'][data-active]::after) { background: var(--a-cyan); opacity: 1; }
+  .diff-fill > :global(section) { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+  .diff-fill :global(.diff) { flex: 1 1 0; min-height: 0; max-height: none; }
   .file-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--neutral) 6%, var(--canvas)); }
   .file-tab { display: inline-flex; flex: none; align-items: center; gap: 8px; max-width: 420px; padding: 6px 12px; border-right: 1px solid var(--line); border-bottom: 2px solid transparent; font: 500 11.5px var(--fm); color: var(--muted-fg); white-space: nowrap; }
   .file-tab .name { overflow: hidden; text-overflow: ellipsis; }

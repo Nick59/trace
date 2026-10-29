@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- On desktop the step page panes are resizable and collapsible (workflow graph versus content, step panel versus diff) with draggable, keyboard-accessible handles, double-click to reset, and sizes remembered in the browser.
+- On desktop the step page panes are resizable and collapsible (workflow graph versus content; the step panel collapses to its title line) with draggable, keyboard-accessible handles, double-click to reset, and sizes remembered in the browser.
 - Workflows are now business scenarios (an actor and a goal, with the outcomes as labelled branches) instead of entrypoint traces; each has an actor shown on the pull request page and the step page.
 - Every changed file must be covered: a submission that leaves files out is rejected with the list of uncovered paths, and files without runtime behavior go in a separate "unassigned" list with a reason.
 - The pull request page shows a coverage indicator ("28/60 files"), plus collapsible "Not in any workflow" and "Unassigned" lists.
