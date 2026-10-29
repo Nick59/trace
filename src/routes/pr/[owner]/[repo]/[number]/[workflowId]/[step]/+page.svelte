@@ -141,7 +141,7 @@
       {/if}
       <span class="tab">Workflow</span>
       <div class="grow min-w-0">
-        {#if data.workflow.actor}<div class="truncate font-mono text-[10px] leading-tight normal-case tracking-normal text-muted-foreground" title="Actor">{data.workflow.actor}</div>{/if}
+        {#if data.workflow.feature}<div class="truncate font-mono text-[10px] leading-tight normal-case tracking-normal text-muted-foreground" title="Feature{data.workflow.actor ? ` · ${data.workflow.actor}` : ''}">{data.workflow.feature}</div>{:else if data.workflow.actor}<div class="truncate font-mono text-[10px] leading-tight normal-case tracking-normal text-muted-foreground" title="Actor">{data.workflow.actor}</div>{/if}
         <h1 class="truncate text-[12px] font-medium normal-case tracking-normal text-foreground" title={data.workflow.title}>{data.workflow.title}</h1>
       </div>
       <KindBadge {kind} />

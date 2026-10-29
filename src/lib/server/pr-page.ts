@@ -9,13 +9,15 @@ import { coverage, workflowApiConfigured, workflowToMermaid } from './workflows'
 export interface PrParams { owner: string; repo: string; number: number }
 export interface WorkflowSummary { id: string; position: number; title: string; actor?: string; summary: string; entrypoint: { kind: EntrypointKind; label: string }; stepCount: number }
 
+export interface FeatureGroup { feature: string; actor?: string; workflows: WorkflowSummary[] }
+
 export interface PrCoverage { total: number; covered: number; unassigned: number; uncovered: string[]; unassignedFiles: UnassignedFile[] }
 
 export interface PrPageData {
   params: PrParams;
   pr: PullRequestSummary;
   analysis: { id: string; status: AnalysisStatus; source: AnalysisSource | null; headSha: string; updatedAt: string } | null;
-  workflows: WorkflowSummary[];
+  features: FeatureGroup[];
   coverage: PrCoverage | null;
   stale: boolean;
   setup: { githubConfigured: boolean; apiConfigured: boolean };
@@ -67,6 +69,20 @@ function summaryOf(pr: PullRequestSummary): PullRequestSummary {
   return { title, url, repository, number, author, base, head, headSha };
 }
 
+// Analyses stored before features existed have no feature text; each such workflow forms a group titled after itself.
+function groupByFeature(workflows: Workflow[]): FeatureGroup[] {
+  const groups = new Map<string, FeatureGroup>();
+  for (const workflow of workflows) {
+    const feature = workflow.feature ?? workflow.title;
+    const summary: WorkflowSummary = { id: workflow.id, position: workflow.position, title: workflow.title, ...(workflow.actor ? { actor: workflow.actor } : {}),
+      summary: workflow.summary, entrypoint: workflow.entrypoint, stepCount: workflow.steps.length };
+    const group = groups.get(feature);
+    if (group) group.workflows.push(summary);
+    else groups.set(feature, { feature, ...(workflow.actor ? { actor: workflow.actor } : {}), workflows: [summary] });
+  }
+  return [...groups.values()];
+}
+
 export async function loadPrPage(owner: string, repo: string, number: string | number): Promise<PrPageData> {
   const params = parsePrParams(owner, repo, number);
   const commands = cliCommands(params);
@@ -77,8 +93,7 @@ export async function loadPrPage(owner: string, repo: string, number: string | n
   return {
     params, pr,
     analysis: analysis ? { id: analysis.id, status: analysis.status, source: analysis.source, headSha: analysis.headSha, updatedAt: analysis.updatedAt } : null,
-    workflows: (analysis?.workflows ?? []).map((workflow) => ({ id: workflow.id, position: workflow.position, title: workflow.title, ...(workflow.actor ? { actor: workflow.actor } : {}),
-      summary: workflow.summary, entrypoint: workflow.entrypoint, stepCount: workflow.steps.length })),
+    features: groupByFeature(analysis?.workflows ?? []),
     coverage: analysis?.status === 'ready' ? { ...coverage(analysis), unassignedFiles: analysis.unassigned } : null,
     stale: Boolean(live && analysis && live.headSha !== analysis.headSha),
     setup: { githubConfigured: configured(process.env.GITHUB_TOKEN), apiConfigured: workflowApiConfigured() },

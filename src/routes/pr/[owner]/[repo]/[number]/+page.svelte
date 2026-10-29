@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowRight, GitBranch, LoaderCircle, RefreshCw } from '@lucide/svelte';
+  import { ArrowRight, ChevronDown, GitBranch, LoaderCircle, RefreshCw } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import { invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
@@ -16,7 +16,8 @@
   let generateError = $state('');
   let reloading = $state(false);
   let base = $derived(`/pr/${data.params.owner}/${data.params.repo}/${data.params.number}`);
-  let hasWorkflows = $derived(data.workflows.length > 0);
+  let workflowCount = $derived(data.features.reduce((sum, group) => sum + group.workflows.length, 0));
+  let hasWorkflows = $derived(workflowCount > 0);
   let accounted = $derived(data.coverage ? data.coverage.covered + data.coverage.unassigned : 0);
   let complete = $derived(data.coverage ? data.coverage.uncovered.length === 0 : false);
   let showUncovered = $state(false);
@@ -111,7 +112,7 @@
     {#if hasWorkflows}
       <div class="panel panel-cyan">
         <div class="panel-head">
-          <span class="tab">Workflows</span><span class="dim">{data.workflows.length}</span>
+          <span class="tab">Workflows</span><span class="dim">{workflowCount}</span>
           {#if data.coverage && data.coverage.total > 0}
             <span class="cov {complete ? 'ok' : 'gap'}" title={complete ? 'Every changed file is in a workflow or listed as unassigned' : 'Some changed files are in no workflow'}>{accounted}/{data.coverage.total} files</span>
           {/if}
@@ -135,10 +136,22 @@
             <ul>{#each data.coverage.unassignedFiles as entry}<li>{entry.path}<span class="why">{entry.reason}</span></li>{/each}</ul>
           </details>
         {/if}
-        {#each data.workflows as workflow, index (workflow.id)}
-          <WorkflowRow {workflow} {index} href="{base}/{workflow.id}/1" open={openPanel === workflow.id} ontoggle={() => toggle(workflow.id)}>
-            <RecomputePanel workflowId={workflow.id} title={workflow.title} endpoint="/api{base}/workflows/{workflow.id}" apiConfigured={data.setup.apiConfigured} source={data.cliSource} bind:tool ondone={() => (openPanel = null)} />
-          </WorkflowRow>
+        {#each data.features as group (group.feature)}
+          <details class="feature" open>
+            <summary>
+              <ChevronDown size={14} class="fchev" aria-hidden="true" />
+              <span class="min-w-0 flex-1">
+                <span class="block text-[15px] font-medium">{group.feature}</span>
+                {#if group.actor}<span class="block font-mono text-[11px] text-muted-foreground" title="Actor">{group.actor}</span>{/if}
+              </span>
+              <span class="dim">{group.workflows.length} {group.workflows.length === 1 ? 'workflow' : 'workflows'}</span>
+            </summary>
+            {#each group.workflows as workflow, index (workflow.id)}
+              <WorkflowRow {workflow} {index} href="{base}/{workflow.id}/1" open={openPanel === workflow.id} ontoggle={() => toggle(workflow.id)}>
+                <RecomputePanel workflowId={workflow.id} title={workflow.title} endpoint="/api{base}/workflows/{workflow.id}" apiConfigured={data.setup.apiConfigured} source={data.cliSource} bind:tool ondone={() => (openPanel = null)} />
+              </WorkflowRow>
+            {/each}
+          </details>
         {/each}
       </div>
     {:else}
@@ -162,6 +175,12 @@
 </main>
 
 <style>
+  .feature { border-bottom: 1px solid color-mix(in srgb, var(--a-cyan) 18%, var(--line)); }
+  .feature:last-child { border-bottom: 0; }
+  .feature > summary { display: flex; align-items: center; gap: 10px; padding: 10px 16px; cursor: pointer; list-style: none; background: color-mix(in srgb, var(--a-cyan) 5%, transparent); }
+  .feature > summary::-webkit-details-marker { display: none; }
+  .feature > summary :global(.fchev) { flex: none; color: var(--muted-fg); transition: transform 0.15s; }
+  .feature:not([open]) > summary :global(.fchev) { transform: rotate(-90deg); }
   .cov { font: 500 11px var(--fm); text-transform: none; letter-spacing: 0; padding: 1px 6px; border-radius: 3px; border: 1px solid; }
   .cov.ok { color: var(--a-green); border-color: color-mix(in srgb, var(--a-green) 45%, var(--line)); }
   .cov.gap { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--line)); }

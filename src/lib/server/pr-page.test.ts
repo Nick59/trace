@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { cliCommands, loadPrPage, loadWorkflowStep, parsePrParams } from './pr-page';
 import { closeStore, createDraft, submitWorkflows } from './store';
@@ -49,13 +50,14 @@ test('PR page reports workflows and flags an analysis made for an older commit',
   stubHead('0123456789abcdef');
   const empty = await loadPrPage('acme', 'widget', '7');
   assert.equal(empty.analysis, null);
-  assert.deepEqual(empty.workflows, []);
+  assert.deepEqual(empty.features, []);
   assert.equal(empty.pr.title, 'Track request flow');
   const draft = createDraft(samplePr());
   submitWorkflows(draft.id, draft.headSha, sampleWorkflows, 'agent');
   const fresh = await loadPrPage('acme', 'widget', '7');
   assert.equal(fresh.stale, false);
-  assert.deepEqual(fresh.workflows.map((workflow) => [workflow.id, workflow.stepCount, workflow.entrypoint.kind, workflow.actor]), [['w1', 2, 'http', 'API client']]);
+  assert.deepEqual(fresh.features.map((group) => [group.feature, group.actor, group.workflows.map((workflow) => [workflow.id, workflow.stepCount, workflow.entrypoint.kind])]),
+    [['An API client lists widgets', 'API client', [['w1', 2, 'http']]]]);
   assert.deepEqual(fresh.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], unassignedFiles: [] });
   assert.equal(empty.coverage, null);
   stubHead('ffffffff');
@@ -78,10 +80,14 @@ test('workflow step data carries the mermaid text, the file and prev/next', () =
   }
 }));
 
-test('workflow step data lists the primary file first, then the step paths', () => withEnv(async () => {
+test('workflow step data holds the single file of a step, and the primary file first for legacy steps with paths', () => withEnv(async () => {
   const draft = createDraft(samplePr());
-  const step = sampleWorkflows[0].steps[0];
-  submitWorkflows(draft.id, draft.headSha, [{ ...sampleWorkflows[0], steps: [{ ...step, paths: ['src/core/service.ts'] }] }], 'agent');
+  submitWorkflows(draft.id, draft.headSha, sampleWorkflows, 'agent');
+  assert.deepEqual(loadWorkflowStep('acme', 'widget', '7', 'w1', '1').files.map((file) => file.path), ['src/api/route.ts']);
+  const db = new DatabaseSync(path.join(process.env.TRACE_DATA_DIR!, 'trace.db'));
+  const steps = sampleWorkflows[0].steps.map((step, index) => ({ id: `s${index + 1}`, ...step, paths: index === 0 ? ['src/core/service.ts'] : [] }));
+  db.prepare('UPDATE workflows SET steps_json = ? WHERE analysis_id = ?').run(JSON.stringify(steps), draft.id);
+  db.close();
   const data = loadWorkflowStep('acme', 'widget', '7', 'w1', '1');
   assert.deepEqual(data.files.map((file) => file.path), ['src/api/route.ts', 'src/core/service.ts']);
   assert.equal(data.file?.path, 'src/api/route.ts');
@@ -94,4 +100,13 @@ test('PR page shows the coverage of an old incomplete analysis', () => withEnv(a
     [{ path: 'src/core/service.ts', reason: 'Generated file.' }]);
   const data = await loadPrPage('acme', 'widget', '7');
   assert.deepEqual(data.coverage, { total: 2, covered: 1, unassigned: 1, uncovered: [], unassignedFiles: [{ path: 'src/core/service.ts', reason: 'Generated file.' }] });
+}));
+
+test('PR page groups workflows by feature in order of first appearance, and a workflow without feature falls back to its title', () => withEnv(async () => {
+  stubHead('0123456789abcdef');
+  const draft = createDraft(samplePr());
+  submitWorkflows(draft.id, draft.headSha, [sampleWorkflows[0], { ...sampleWorkflows[0], feature: 'Other feature', title: 'B' }, { ...sampleWorkflows[0], title: 'C' }], 'agent');
+  const data = await loadPrPage('acme', 'widget', '7');
+  assert.deepEqual(data.features.map((group) => [group.feature, group.workflows.map((workflow) => workflow.id)]),
+    [['An API client lists widgets', ['w1', 'w3']], ['Other feature', ['w2']]]);
 }));

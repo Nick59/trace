@@ -4,7 +4,7 @@ export interface PullRequestSnapshot extends PullRequestSummary { description:st
 export type EntrypointKind = 'http'|'cli'|'job'|'event'|'ui'|'other';
 export interface WorkflowStep { id:string; title:string; summary:string; path:string; paths:string[]; symbols:string[]; checks:string[] }
 export interface WorkflowEdge { from:string; to:string; label?:string }
-export interface Workflow { id:string; position:number; title:string; actor?:string; entrypoint:{ kind:EntrypointKind; label:string }; summary:string; steps:WorkflowStep[]; edges:WorkflowEdge[] }
+export interface Workflow { id:string; position:number; title:string; feature?:string; actor?:string; entrypoint:{ kind:EntrypointKind; label:string }; summary:string; steps:WorkflowStep[]; edges:WorkflowEdge[] }
 export type AnalysisStatus = 'draft'|'ready';
 export type AnalysisSource = 'agent'|'api';
 export interface UnassignedFile { path:string; reason:string }

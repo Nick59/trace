@@ -8,7 +8,7 @@ import { coverageError, validUnassigned, validWorkflow, validWorkflows } from '.
 export interface AnalysisSummary { id: string; title: string; repository: string; number: number; headSha: string; status: AnalysisStatus; source: AnalysisSource | null; workflowCount: number; updatedAt: string }
 
 const MAX_RECORD_BYTES = 5 * 1024 * 1024;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const databases = new Map<string, DatabaseSync>();
@@ -22,13 +22,14 @@ function addColumn(db: DatabaseSync, table: string, column: string, definition: 
   if (!columns.some((candidate) => candidate.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
-// Version 1 databases lack the columns added for business workflows. The web app and the MCP server can both
+// Older databases lack the columns added for business workflows (v2: actor, unassigned) and features (v3). The web app and the MCP server can both
 // start at once, so the check and the version bump run inside one write transaction.
 function migrate(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
   try {
     addColumn(db, 'analyses', 'unassigned_json', "TEXT NOT NULL DEFAULT '[]'");
     addColumn(db, 'workflows', 'actor', 'TEXT');
+    addColumn(db, 'workflows', 'feature', 'TEXT');
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (error) {
@@ -56,7 +57,7 @@ function open(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS analyses_pr ON analyses (repository COLLATE NOCASE, number, updated_at);
     CREATE TABLE IF NOT EXISTS workflows (
       analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE, id TEXT NOT NULL, position INTEGER NOT NULL,
-      title TEXT NOT NULL, actor TEXT, entrypoint_kind TEXT NOT NULL, entrypoint_label TEXT NOT NULL, summary TEXT NOT NULL,
+      title TEXT NOT NULL, feature TEXT, actor TEXT, entrypoint_kind TEXT NOT NULL, entrypoint_label TEXT NOT NULL, summary TEXT NOT NULL,
       steps_json TEXT NOT NULL, edges_json TEXT NOT NULL, PRIMARY KEY (analysis_id, id)
     );
   `);
@@ -92,7 +93,7 @@ type Row = Record<string, string | number | null>;
 function readWorkflows(db: DatabaseSync, analysisId: string, snapshot: PullRequestSnapshot): Workflow[] {
   const rows = db.prepare('SELECT * FROM workflows WHERE analysis_id = ? ORDER BY position').all(analysisId) as Row[];
   if (rows.length === 0) return [];
-  const raw = rows.map((row) => ({ title: row.title, actor: row.actor ?? undefined, summary: row.summary, entrypoint: { kind: row.entrypoint_kind, label: row.entrypoint_label },
+  const raw = rows.map((row) => ({ title: row.title, feature: row.feature ?? undefined, actor: row.actor ?? undefined, summary: row.summary, entrypoint: { kind: row.entrypoint_kind, label: row.entrypoint_label },
     steps: JSON.parse(String(row.steps_json)), edges: JSON.parse(String(row.edges_json)) }));
   const workflows = validWorkflows(raw, new Set(snapshot.files.map((file) => file.path)));
   if (!workflows) throw new Error('Stored workflows are invalid.');
@@ -142,7 +143,7 @@ export function submitWorkflows(id: string, headSha: string, workflows: unknown,
   if (headSha !== existing.headSha) throw new Error('Head SHA does not match this draft analysis.');
   const changed = new Set(existing.pr.files.map((file) => file.path));
   const valid = validWorkflows(workflows, changed, true);
-  if (!valid) throw new Error('Workflows are invalid, have no actor, or refer to unknown paths.');
+  if (!valid) throw new Error('Workflows are invalid, have no feature or actor, use legacy paths, or refer to unknown paths.');
   const unassigned = validUnassigned(unassignedInput, changed);
   if (!unassigned) throw new Error('Unassigned files are invalid: each needs a changed file path once and a reason.');
   const gap = coverageError(undefined, { pr: existing.pr, workflows: valid, unassigned });
@@ -156,9 +157,9 @@ export function submitWorkflows(id: string, headSha: string, workflows: unknown,
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('DELETE FROM workflows WHERE analysis_id = ?').run(id);
-    const insert = db.prepare('INSERT INTO workflows (analysis_id, id, position, title, actor, entrypoint_kind, entrypoint_label, summary, steps_json, edges_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insert = db.prepare('INSERT INTO workflows (analysis_id, id, position, title, feature, actor, entrypoint_kind, entrypoint_label, summary, steps_json, edges_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const { workflow, steps, edges } of rows) {
-      insert.run(id, workflow.id, workflow.position, workflow.title, workflow.actor ?? null, workflow.entrypoint.kind, workflow.entrypoint.label, workflow.summary, steps, edges);
+      insert.run(id, workflow.id, workflow.position, workflow.title, workflow.feature ?? null, workflow.actor ?? null, workflow.entrypoint.kind, workflow.entrypoint.label, workflow.summary, steps, edges);
     }
     db.prepare("UPDATE analyses SET status = 'ready', source = ?, updated_at = ?, unassigned_json = ? WHERE id = ?").run(source, now, unassignedJson, id);
     db.exec('COMMIT');
@@ -177,7 +178,7 @@ export function replaceWorkflow(analysisId: string, workflowId: string, headSha:
   if (!current) throw new Error('Workflow not found.');
   if (headSha !== existing.headSha) throw new Error('Head SHA does not match this analysis.');
   const valid = validWorkflow(workflow, new Set(existing.pr.files.map((file) => file.path)), current.position, true);
-  if (!valid) throw new Error('Workflow is invalid, has no actor, or refers to unknown paths.');
+  if (!valid) throw new Error('Workflow is invalid, has no feature or actor, uses legacy paths, or refers to unknown paths.');
   const workflows = existing.workflows.map((candidate) => candidate.id === workflowId ? valid : candidate);
   const gap = coverageError(existing, { pr: existing.pr, workflows, unassigned: existing.unassigned });
   if (gap) throw new Error(gap);
@@ -189,8 +190,8 @@ export function replaceWorkflow(analysisId: string, workflowId: string, headSha:
   const db = open();
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare('UPDATE workflows SET title = ?, actor = ?, entrypoint_kind = ?, entrypoint_label = ?, summary = ?, steps_json = ?, edges_json = ? WHERE analysis_id = ? AND id = ?')
-      .run(valid.title, valid.actor ?? null, valid.entrypoint.kind, valid.entrypoint.label, valid.summary, steps, edges, analysisId, workflowId);
+    db.prepare('UPDATE workflows SET title = ?, feature = ?, actor = ?, entrypoint_kind = ?, entrypoint_label = ?, summary = ?, steps_json = ?, edges_json = ? WHERE analysis_id = ? AND id = ?')
+      .run(valid.title, valid.feature ?? null, valid.actor ?? null, valid.entrypoint.kind, valid.entrypoint.label, valid.summary, steps, edges, analysisId, workflowId);
     db.prepare('UPDATE analyses SET source = ?, updated_at = ? WHERE id = ?').run(source, now, analysisId);
     db.exec('COMMIT');
   } catch (error) {

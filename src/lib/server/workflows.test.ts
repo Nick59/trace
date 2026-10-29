@@ -27,8 +27,7 @@ test('rejects unknown paths, unknown kinds and exceeded limits', () => {
   assert.equal(validWorkflows(sampleWorkflows, new Set(['other.ts'])), undefined);
   assert.equal(validWorkflows([{ ...sampleWorkflows[0], entrypoint: { kind: 'magic', label: 'x' } }], paths), undefined);
   assert.equal(validWorkflows([], paths), undefined);
-  assert.equal(validWorkflows(Array(13).fill(sampleWorkflows[0]), paths), undefined);
-  assert.equal(validWorkflows([{ ...sampleWorkflows[0], steps: Array(16).fill(step) }], paths), undefined);
+  assert.equal(validWorkflows([{ ...sampleWorkflows[0], steps: Array(21).fill(step) }], paths), undefined);
   assert.equal(validWorkflows([{ ...sampleWorkflows[0], steps: [{ ...step, symbols: Array(9).fill('a') }] }], paths), undefined);
   assert.equal(validWorkflows([{ ...sampleWorkflows[0], title: 'x'.repeat(121) }], paths), undefined);
 });
@@ -69,7 +68,7 @@ test('generateWorkflows posts to the configured endpoint and validates the outpu
     assert.equal(result.workflows[0].steps.length, 2);
     assert.match(seen, /models\.test/);
     assert.match(seen, /untrusted data/);
-    assert.match(seen, /business scenario/);
+    assert.match(seen, /one file per step/);
     assert.match(seen, /changedFiles/);
     reply = { workflows: [{ ...sampleWorkflows[0], steps: [{ ...sampleWorkflows[0].steps[0], path: 'nope.ts' }] }] };
     await assert.rejects(generateWorkflows(samplePr()), /invalid workflows/);
@@ -97,15 +96,30 @@ test('actor is required for submissions, optional when reading, and limited in l
   assert.equal(validWorkflows(sampleWorkflows, paths, true)?.[0].actor, 'API client');
 });
 
-test('paths default to empty and must be unique changed files other than path', () => {
+test('feature is required for submissions, optional when reading, and limited in length', () => {
+  const { feature: _feature, ...noFeature } = sampleWorkflows[0];
+  assert.equal(validWorkflows([noFeature], paths, true), undefined);
+  assert.equal(validWorkflows([noFeature], paths)?.[0].feature, undefined);
+  assert.equal(validWorkflows([{ ...noFeature, feature: 'x'.repeat(121) }], paths), undefined);
+  assert.equal(validWorkflows([{ ...noFeature, feature: ' ' }], paths, true), undefined);
+  assert.equal(validWorkflows(sampleWorkflows, paths, true)?.[0].feature, 'An API client lists widgets');
+});
+
+test('there is no cap on the number of workflows, and a step may hold up to 20 per workflow', () => {
+  assert.equal(validWorkflows(Array(40).fill(sampleWorkflows[0]), paths, true)?.length, 40);
+  assert.equal(validWorkflows([{ ...sampleWorkflows[0], steps: Array(20).fill(step) }], paths, true)?.[0].steps.length, 20);
+});
+
+test('legacy paths are read, but rejected on submit unless empty; they must be unique changed files other than path', () => {
+  const read = (extra: unknown, strict = false) => validWorkflows([{ ...sampleWorkflows[0], steps: [{ ...step, paths: extra }] }], paths, strict);
   assert.deepEqual(validWorkflows(sampleWorkflows, paths)![0].steps[0].paths, []);
-  assert.deepEqual(withSteps([{ ...step, paths: ['src/core/service.ts'] }])![0].steps[0].paths, ['src/core/service.ts']);
-  assert.equal(withSteps([{ ...step, paths: ['src/api/route.ts'] }]), undefined);
-  assert.equal(withSteps([{ ...step, paths: ['nope.ts'] }]), undefined);
-  assert.equal(withSteps([{ ...step, paths: ['src/core/service.ts', 'src/core/service.ts'] }]), undefined);
-  assert.equal(withSteps([{ ...step, paths: 'src/core/service.ts' }]), undefined);
-  const many = new Set(Array.from({ length: 10 }, (_, index) => `f${index}.ts`).concat('a.ts'));
-  assert.equal(validWorkflow({ ...sampleWorkflows[0], steps: [{ ...step, path: 'a.ts', paths: Array.from({ length: 9 }, (_, index) => `f${index}.ts`) }] }, many, 1, true), undefined);
+  assert.deepEqual(read(['src/core/service.ts'])![0].steps[0].paths, ['src/core/service.ts']);
+  assert.equal(read(['src/core/service.ts'], true), undefined);
+  assert.deepEqual(read([], true)![0].steps[0].paths, []);
+  assert.equal(read(['src/api/route.ts']), undefined);
+  assert.equal(read(['nope.ts']), undefined);
+  assert.equal(read(['src/core/service.ts', 'src/core/service.ts']), undefined);
+  assert.equal(read('src/core/service.ts'), undefined);
 });
 
 test('unassigned entries must be unique changed files with a short reason', () => {
@@ -131,10 +145,15 @@ test('coverage counts used, unassigned and uncovered files and lists them in the
   assert.ok(!message.includes('f50.ts'));
 });
 
-test('the guide teaches business scenarios, coverage and carries a worked example', () => {
+test('the guide teaches features, one file per step and carries a worked example without paths', () => {
   const guide = analysisGuide(LIMITS);
-  for (const phrase of [/business scenario/, /actor plus goal/, /uncovered/, /unassigned/, /never as a code location/, /Worked example/, /reserved → 409/]) assert.match(guide, phrase);
-  assert.doesNotMatch(guide, /Each entrypoint is one workflow/);
+  for (const phrase of [/one file per step/, /A \*\*feature\*\*/, /actor plus a goal/, /uncovered/, /unassigned/, /There is no limit on the number of workflows/, /Worked example/, /reserved → 409/, /Verified by/]) assert.match(guide, phrase);
+  assert.doesNotMatch(guide, /business scenario/);
+  const example = JSON.parse(guide.slice(guide.lastIndexOf('```json') + 7, guide.lastIndexOf('```')));
+  assert.equal(example.workflows.length, 2);
+  assert.equal(new Set(example.workflows.map((workflow: { feature: string }) => workflow.feature)).size, 1);
+  for (const workflow of example.workflows) for (const step of workflow.steps) assert.equal('paths' in step, false);
+  assert.deepEqual(validWorkflows(example.workflows, new Set(example.workflows.flatMap((workflow: { steps: Array<{ path: string }> }) => workflow.steps.map((step) => step.path))), true)?.length, 2);
 });
 
 test('docs carry the guide verbatim and the static copy is identical', async () => {

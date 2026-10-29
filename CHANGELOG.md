@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- Workflows are grouped by feature on the pull request page: each feature (an actor and a goal) is a collapsible group with compact rows, one per technical path, and the step page shows the feature above the workflow title.
+- Every workflow needs a `feature` and the number of workflows is no longer limited; a stored analysis is still capped at 5 MB.
 - On desktop the step page panes are resizable and collapsible (workflow graph versus content; the step panel collapses to its title line) with draggable, keyboard-accessible handles, double-click to reset, and sizes remembered in the browser.
 - Workflows are now business scenarios (an actor and a goal, with the outcomes as labelled branches) instead of entrypoint traces; each has an actor shown on the pull request page and the step page.
 - Every changed file must be covered: a submission that leaves files out is rejected with the list of uncovered paths, and files without runtime behavior go in a separate "unassigned" list with a reason.
@@ -25,6 +27,8 @@
 - The app follows the system light or dark color scheme.
 
 ### Changed
+- A workflow is now one technical path through a feature (one request, one outcome) and each step is exactly one file in execution order, so the diff shows a single file; steps allow up to 20 per workflow and submissions can no longer bundle files with `paths` (older analyses still show their file tabs). Recompute the pull request to get the new shape.
+- The database moves to schema version 3 (a nullable `workflows.feature` column) on first start; existing analyses keep working and are grouped under their own workflow titles until recomputed.
 - On the step page, ↓ and ↑ follow the graph (next step along the flow, back to where you came from) and ← and → switch to a sibling branch; the sibling nodes are outlined with dashes and the key hints dim when a direction has no target. Prev/Next keep the linear order; PageUp, PageDown and Space still scroll.
 - Step summaries are one sentence (up to 200 characters) and each step lists 1-4 "what it should do" checks with green check icons; the step panel is much smaller so the diff gets the room.
 - The analysis instructions (MCP prompts, model prompts, `docs/cli-agent.md`) now come from one guide that teaches business scenarios, full coverage and includes a worked example; older analyses still load unchanged.

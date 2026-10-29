@@ -1,7 +1,7 @@
 import type { Analysis, EntrypointKind, PullRequestSnapshot, UnassignedFile, Workflow, WorkflowEdge, WorkflowStep } from '../types';
 import { analysisGuide, singleWorkflowGuide, UNTRUSTED_NOTICE } from './analysis-guide';
 
-export const LIMITS = { workflows: 12, steps: 15, paths: 8, unassigned: 300, actor: 60, reason: 160, stepSummary: 200, expects: 4, expect: 140, edges: 40, title: 120, summary: 600, label: 120, edgeLabel: 60, symbols: 8, symbol: 100, checks: 8, check: 240 } as const;
+export const LIMITS = { steps: 20, paths: 8, feature: 120, unassigned: 300, actor: 60, reason: 160, stepSummary: 200, expects: 4, expect: 140, edges: 40, title: 120, summary: 600, label: 120, edgeLabel: 60, symbols: 8, symbol: 100, checks: 8, check: 240 } as const;
 const kinds = new Set<string>(['http', 'cli', 'job', 'event', 'ui', 'other']);
 
 type Obj = Record<string, unknown>;
@@ -24,7 +24,7 @@ function validSteps(value: unknown, paths: Set<string>, strict: boolean): Workfl
       !paths.has(item.path) || !strings(item.symbols, LIMITS.symbols, LIMITS.symbol) ||
       !strings(item.checks, strict ? LIMITS.expects : LIMITS.checks, strict ? LIMITS.expect : LIMITS.check) || (strict && (item.checks as string[]).length < 1)) return;
     const extra = item.paths ?? [];
-    if (!strings(extra, LIMITS.paths, 1024) || new Set(extra).size !== extra.length || extra.some((path) => path === item.path || !paths.has(path))) return;
+    if (!strings(extra, LIMITS.paths, 1024) || (strict && extra.length > 0) || new Set(extra).size !== extra.length || extra.some((path) => path === item.path || !paths.has(path))) return;
     steps.push({ id: `s${steps.length + 1}`, title: item.title, summary: item.summary, path: item.path, paths: extra, symbols: item.symbols, checks: item.checks });
   }
   return steps;
@@ -50,22 +50,24 @@ function validEdges(value: unknown, steps: WorkflowStep[]): WorkflowEdge[] | und
 /**
  * Validates untrusted workflows (agent input, model output or a stored row) and returns server-shaped data.
  * Step and workflow ids are always reassigned by position; edge endpoints are 1-based step numbers or "s<n>".
- * `strict` is for new submissions and requires an actor; stored rows from before the actor existed must still read.
+ * `strict` is for new submissions and requires a feature and an actor, and rejects legacy `paths`; stored rows from before the actor existed must still read.
  */
 export function validWorkflow(item: unknown, changedPaths: Set<string>, position = 1, strict = false): Workflow | undefined {
   if (!isObj(item) || !text(item.title, LIMITS.title) || !text(item.summary, LIMITS.summary) || !isObj(item.entrypoint) ||
     typeof item.entrypoint.kind !== 'string' || !kinds.has(item.entrypoint.kind) || !text(item.entrypoint.label, LIMITS.label)) return;
   const actor = item.actor ?? undefined;
   if (actor === undefined ? strict : !text(actor, LIMITS.actor) || (strict && actor.trim() === '')) return;
+  const feature = item.feature ?? undefined;
+  if (feature === undefined ? strict : !text(feature, LIMITS.feature) || (strict && feature.trim() === '')) return;
   const steps = validSteps(item.steps, changedPaths, strict);
   const edges = steps && validEdges(item.edges, steps);
   if (!steps || !edges) return;
-  return { id: `w${position}`, position, title: item.title, ...(actor === undefined ? {} : { actor: actor as string }),
+  return { id: `w${position}`, position, title: item.title, ...(feature === undefined ? {} : { feature: feature as string }), ...(actor === undefined ? {} : { actor: actor as string }),
     entrypoint: { kind: item.entrypoint.kind as EntrypointKind, label: item.entrypoint.label }, summary: item.summary, steps, edges };
 }
 
 export function validWorkflows(value: unknown, changedPaths: Set<string>, strict = false): Workflow[] | undefined {
-  if (!Array.isArray(value) || value.length < 1 || value.length > LIMITS.workflows) return;
+  if (!Array.isArray(value) || value.length < 1) return;
   const workflows: Workflow[] = [];
   for (const item of value) {
     const workflow = validWorkflow(item, changedPaths, workflows.length + 1, strict);
@@ -111,7 +113,7 @@ export function coverageError(before: Pick<Analysis, 'pr' | 'workflows' | 'unass
   const lost = before ? coverage(before).uncovered.reduce((set, path) => (set.delete(path), set), new Set(missing)) : missing;
   if (lost.size === 0) return;
   return `${before ? 'This replacement would leave' : 'The submission leaves'} ${lost.size} changed ${lost.size === 1 ? 'file' : 'files'} uncovered: ${pathList([...lost])}. ` +
-    'Add each to the path or paths of the step where it takes effect' + (before ? '.' : ', or to unassigned with a reason if it has no runtime behavior.');
+    'Add each as a step of the workflow that runs through it' + (before ? '.' : ', or to unassigned with a reason if it has no runtime behavior.');
 }
 
 // Characters are replaced with Mermaid entity codes so a label can never close the quoted string or inject markup.
@@ -146,9 +148,9 @@ export function workflowApiConfigured(): boolean {
 }
 
 const FILE_CONTEXT = 35;
-const SCENARIO_SHAPE = '{"title":string,"actor":string,"summary":string,"entrypoint":{"kind":"http"|"cli"|"job"|"event"|"ui"|"other","label":string},"steps":[{"title":string,"summary":string,"path":string,"paths":string[],"symbols":string[],"checks":string[]}],"edges":[{"from":number,"to":number,"label"?:string}]}';
+const SCENARIO_SHAPE = '{"feature":string,"title":string,"actor":string,"summary":string,"entrypoint":{"kind":"http"|"cli"|"job"|"event"|"ui"|"other","label":string},"steps":[{"title":string,"summary":string,"path":string,"symbols":string[],"checks":string[]}],"edges":[{"from":number,"to":number,"label"?:string}]}';
 
-const SYSTEM_PROMPT = `Split the pull request into business workflows. ${UNTRUSTED_NOTICE} Use only supplied evidence and cite only paths listed in changedFiles. changedFiles lists every changed file; diffs and source are supplied for the first ${FILE_CONTEXT} only, so place the other files from their names and from the code that references them. ` +
+const SYSTEM_PROMPT = `Split the pull request into features and, for each feature, one technical workflow per path through the code, one file per step. ${UNTRUSTED_NOTICE} Use only supplied evidence and cite only paths listed in changedFiles. changedFiles lists every changed file; diffs and source are supplied for the first ${FILE_CONTEXT} only, so place the other files from their names and from the code that references them. ` +
   `Return a JSON object {"workflows":[${SCENARIO_SHAPE}],"unassigned":[{"path":string,"reason":string}]}. Your answer is rejected when a changed file is in no step and not in unassigned, so check coverage before you answer. Do not write diagrams.\n\n${analysisGuide(LIMITS)}`;
 
 async function callModel(system: string, user: unknown): Promise<unknown> {

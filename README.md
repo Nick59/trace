@@ -1,6 +1,6 @@
 # Trace PR Reviewer
 
-A local SvelteKit app that loads a GitHub pull request and splits it into workflows, one per entrypoint, each traced through the code step by step.
+A local SvelteKit app that loads a GitHub pull request and splits it into features and, per feature, technical workflows (one path per outcome, one file per step), each traced through the code step by step.
 
 ## Setup
 

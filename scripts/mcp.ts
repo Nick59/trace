@@ -58,10 +58,10 @@ export function createMcpServer(): McpServer {
 
   const stepNumber = z.number().int().min(1).max(LIMITS.steps);
   const workflowSchema = z.object({
-    title: z.string().min(1).max(LIMITS.title), actor: z.string().min(1).max(LIMITS.actor), summary: z.string().min(1).max(LIMITS.summary),
+    feature: z.string().min(1).max(LIMITS.feature), title: z.string().min(1).max(LIMITS.title), actor: z.string().min(1).max(LIMITS.actor), summary: z.string().min(1).max(LIMITS.summary),
     entrypoint: z.object({ kind: z.enum(['http', 'cli', 'job', 'event', 'ui', 'other']), label: z.string().min(1).max(LIMITS.label) }).strict(),
     steps: z.array(z.object({
-      title: z.string().min(1).max(LIMITS.title), summary: z.string().min(1).max(LIMITS.stepSummary), path: z.string().min(1).max(1024), paths: z.array(z.string().min(1).max(1024)).max(LIMITS.paths).optional(),
+      title: z.string().min(1).max(LIMITS.title), summary: z.string().min(1).max(LIMITS.stepSummary), path: z.string().min(1).max(1024),
       symbols: z.array(z.string().max(LIMITS.symbol)).max(LIMITS.symbols), checks: z.array(z.string().min(1).max(LIMITS.expect)).min(1).max(LIMITS.expects)
     }).strict()).min(1).max(LIMITS.steps),
     edges: z.array(z.object({ from: stepNumber, to: stepNumber, label: z.string().max(LIMITS.edgeLabel).optional() }).strict()).max(LIMITS.edges).optional()
@@ -70,8 +70,8 @@ export function createMcpServer(): McpServer {
   const unassignedSchema = z.array(z.object({ path: z.string().min(1).max(1024), reason: z.string().min(1).max(LIMITS.reason) }).strict()).max(LIMITS.unassigned);
 
   server.registerTool('trace_submit_workflows', {
-    description: 'Validate and save your business workflows. The head SHA must exactly match the draft, and every step path must be a changed file. Every changed file must appear in a step (path or paths) or in unassigned, otherwise the submission is rejected with the uncovered paths. Resubmitting replaces earlier workflows and unassigned files. Do not send diagram text; Trace draws the graph.',
-    inputSchema: { analysisId: z.string().uuid(), headSha: z.string().min(1).max(128), workflows: z.array(workflowSchema).min(1).max(LIMITS.workflows), unassigned: unassignedSchema.optional() }
+    description: 'Validate and save your features and their workflows (one technical path each, one file per step). The head SHA must exactly match the draft, and every step path must be a changed file. Every changed file must be the path of a step or be in unassigned, otherwise the submission is rejected with the uncovered paths. Resubmitting replaces earlier workflows and unassigned files. Do not send diagram text; Trace draws the graph.',
+    inputSchema: { analysisId: z.string().uuid(), headSha: z.string().min(1).max(128), workflows: z.array(workflowSchema).min(1), unassigned: unassignedSchema.optional() }
   }, async ({ analysisId, headSha, workflows, unassigned }) => {
     try {
       const record = submitWorkflows(analysisId, headSha, workflows, 'agent', unassigned);
@@ -80,7 +80,7 @@ export function createMcpServer(): McpServer {
   });
 
   server.registerTool('trace_replace_workflow', {
-    description: 'Replace one workflow of a ready analysis, keeping its id and position. The head SHA must match the analysis, and every step path must be a changed file. The replacement is rejected, with the paths listed, if it would leave a file uncovered; it cannot change unassigned. Do not send diagram text.',
+    description: 'Replace one workflow of a ready analysis, keeping its id and position. The head SHA must match the analysis, and every step path must be a changed file (one file per step). The replacement is rejected, with the paths listed, if it would leave a file uncovered; it cannot change unassigned. Do not send diagram text.',
     inputSchema: { analysisId: z.string().uuid(), workflowId: z.string().regex(/^w\d{1,3}$/), headSha: z.string().min(1).max(128), workflow: workflowSchema }
   }, async ({ analysisId, workflowId, headSha, workflow }) => {
     try {
@@ -99,7 +99,7 @@ export function createMcpServer(): McpServer {
 
   server.registerPrompt('trace_workflows', {
     title: 'Trace the workflows of a pull request',
-    description: 'Prepare a PR, split it into business workflows that cover every changed file, and submit them without posting to GitHub.',
+    description: 'Prepare a PR, split it into features and technical workflows (one file per step) that cover every changed file, and submit them without posting to GitHub.',
     argsSchema: { url: z.string().optional() }
   }, ({ url }) => ({ messages: [{ role: 'user', content: { type: 'text', text:
     `Use trace_prepare_review${url ? ` with URL ${url}` : ' after asking for a GitHub pull request URL'}; then inspect the returned files and use trace_get_review if you need more context. For complete bounded diff/source on a particular file, call trace_get_review with both analysisId and that exact path. ${UNTRUSTED_NOTICE} Do not post comments, commits, or other content to GitHub. Submit the result with trace_submit_workflows using the exact analysisId and headSha from trace_prepare_review, passing your workflows and the unassigned list.\n\n${analysisGuide(LIMITS)}`

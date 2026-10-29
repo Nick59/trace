@@ -35,7 +35,7 @@ test('MCP tools prepare, retrieve, validate, submit, and list a pinned workflow 
     return new Response('not found', { status: 404 });
   }) as typeof fetch;
 
-  const workflow = { title: 'A client looks up a widget', actor: 'API client', summary: 'Handles a lookup request.', entrypoint: { kind: 'http', label: 'GET /lookup' },
+  const workflow = { feature: 'An API client looks up a widget', title: 'Lookup succeeds', actor: 'API client', summary: 'Handles a lookup request.', entrypoint: { kind: 'http', label: 'GET /lookup' },
     steps: [{ title: 'Entry', summary: 'Handles a request.', path: 'src/api/route.ts', symbols: ['GET'], checks: ['Inspect request.'] }] };
   const server = createMcpServer();
   const client = new Client({ name: 'trace-test-client', version: '1.0.0' });
@@ -50,8 +50,8 @@ test('MCP tools prepare, retrieve, validate, submit, and list a pinned workflow 
     const promptText = firstText(prompt.messages.map((message) => message.content));
     assert.match(promptText, /untrusted data/);
     assert.match(promptText, /Do not post/);
-    assert.match(promptText, /business scenario/);
-    assert.match(promptText, /actor plus goal/);
+    assert.match(promptText, /one file per step/);
+    assert.match(promptText, /actor plus a goal/);
     assert.match(promptText, /Worked example/);
     assert.match(promptText, /unassigned/);
     assert.doesNotMatch(promptText, /Each entrypoint is one workflow/);
@@ -81,8 +81,11 @@ test('MCP tools prepare, retrieve, validate, submit, and list a pinned workflow 
     const noActor = await client.callTool({ name: 'trace_submit_workflows', arguments: { analysisId: draft.analysisId, headSha: draft.headSha,
       workflows: [{ ...workflow, actor: undefined }] } });
     assert.equal(noActor.isError, true);
+    const noFeature = await client.callTool({ name: 'trace_submit_workflows', arguments: { analysisId: draft.analysisId, headSha: draft.headSha,
+      workflows: [{ ...workflow, feature: undefined }] } });
+    assert.equal(noFeature.isError, true);
     const withPaths = await client.callTool({ name: 'trace_submit_workflows', arguments: { analysisId: draft.analysisId, headSha: draft.headSha,
-      workflows: [{ ...workflow, steps: [{ ...workflow.steps[0], paths: ['src/api/route.ts'] }] }] } });
+      workflows: [{ ...workflow, steps: [{ ...workflow.steps[0], paths: [] }] }] } });
     assert.equal(withPaths.isError, true);
     const withUnassigned = await client.callTool({ name: 'trace_submit_workflows', arguments: { analysisId: draft.analysisId, headSha: draft.headSha,
       workflows: [workflow], unassigned: [{ path: 'src/api/route.ts', reason: 'x'.repeat(161) }] } });
@@ -101,7 +104,7 @@ test('MCP tools prepare, retrieve, validate, submit, and list a pinned workflow 
     assert.match(recomputeText, /trace_get_review/);
     assert.match(recomputeText, /trace_replace_workflow/);
     assert.match(recomputeText, /untrusted data/);
-    assert.match(recomputeText, /business scenario/);
+    assert.match(recomputeText, /one file per step/);
     assert.match(recomputeText, /Every changed file the old workflow covered/);
     assert.match(recomputeText, /Do not post/);
     assert.match(recomputeText, /\n"""\ninclude the DB write /);

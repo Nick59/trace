@@ -96,7 +96,7 @@ test('replaceWorkflow rejects a head SHA mismatch, an unknown id and an invalid 
   assert.throws(() => replaceWorkflow(draft.id, 'w1', draft.headSha, { ...sampleWorkflows[0], steps: [{ ...sampleWorkflows[0].steps[0], path: 'nope.ts' }] }, 'agent'), /invalid/);
   assert.throws(() => replaceWorkflow(draft.id, 'w1', draft.headSha, 'text', 'agent'), /invalid/);
   const { actor: _actor, ...noActor } = sampleWorkflows[0];
-  assert.throws(() => replaceWorkflow(draft.id, 'w1', draft.headSha, noActor, 'agent'), /no actor/);
+  assert.throws(() => replaceWorkflow(draft.id, 'w1', draft.headSha, noActor, 'agent'), /no feature or actor/);
   assert.throws(() => replaceWorkflow('00000000-0000-4000-8000-000000000000', 'w1', draft.headSha, sampleWorkflows[0], 'agent'), /Analysis not found/);
   const stored = getAnalysis(draft.id)!;
   assert.equal(stored.source, 'agent');
@@ -110,19 +110,20 @@ test('submit rejects an incomplete analysis and lists the uncovered paths', () =
   assert.throws(() => submitWorkflows(draft.id, draft.headSha, [oneStep('src/api/route.ts')], 'agent'), /uncovered: src\/core\/service\.ts/);
   assert.equal(getAnalysis(draft.id)!.status, 'draft');
   assert.throws(() => submitWorkflows(draft.id, draft.headSha, [oneStep('src/api/route.ts')], 'agent', [{ path: 'nope.ts', reason: 'x' }]), /Unassigned files are invalid/);
-  assert.throws(() => submitWorkflows(draft.id, draft.headSha, [{ ...oneStep('src/api/route.ts'), actor: undefined }], 'agent'), /no actor/);
+  assert.throws(() => submitWorkflows(draft.id, draft.headSha, [{ ...oneStep('src/api/route.ts'), actor: undefined }], 'agent'), /no feature or actor/);
 }));
 
-test('submit keeps paths, actor and unassigned files and returns them on read', () => withStore(() => {
+test('submit keeps feature, actor and unassigned files, and rejects legacy paths or a missing feature', () => withStore(() => {
   const draft = createDraft(samplePr());
   const ready = submitWorkflows(draft.id, draft.headSha, [oneStep('src/api/route.ts')], 'agent', [{ path: 'src/core/service.ts', reason: 'Generated file.' }]);
   assert.deepEqual(ready.unassigned, [{ path: 'src/core/service.ts', reason: 'Generated file.' }]);
   const stored = getAnalysis(draft.id)!;
   assert.deepEqual(stored.unassigned, ready.unassigned);
   assert.equal(stored.workflows[0].actor, 'API client');
-  const withPaths = submitWorkflows(draft.id, draft.headSha, [oneStep('src/api/route.ts', { paths: ['src/core/service.ts'] })], 'agent');
-  assert.deepEqual(withPaths.unassigned, []);
-  assert.deepEqual(getAnalysis(draft.id)!.workflows[0].steps[0].paths, ['src/core/service.ts']);
+  assert.equal(stored.workflows[0].feature, 'An API client lists widgets');
+  assert.throws(() => submitWorkflows(draft.id, draft.headSha, [oneStep('src/api/route.ts', { paths: ['src/core/service.ts'] })], 'agent'), /legacy paths/);
+  assert.throws(() => submitWorkflows(draft.id, draft.headSha, [{ ...oneStep('src/api/route.ts'), feature: undefined }], 'agent', [{ path: 'src/core/service.ts', reason: 'r' }]), /no feature or actor/);
+  assert.equal(submitWorkflows(draft.id, draft.headSha, [oneStep('src/api/route.ts', { paths: [] })], 'agent', [{ path: 'src/core/service.ts', reason: 'r' }]).workflows[0].steps[0].paths.length, 0);
 }));
 
 test('replaceWorkflow rejects a replacement that uncovers files and tolerates gaps that already existed', () => withStore(() => {
@@ -151,13 +152,15 @@ test('migrates a version 1 database and reads its old rows without actor, paths 
 
   const analysis = latestAnalysisForPr('acme/widget', 7)!;
   assert.equal(analysis.workflows[0].actor, undefined);
+  assert.equal(analysis.workflows[0].feature, undefined);
   assert.deepEqual(analysis.workflows[0].steps[0].paths, []);
   assert.deepEqual(analysis.unassigned, []);
   assert.equal(coverage(analysis).covered, 1);
   assert.deepEqual(coverage(analysis).uncovered, ['src/core/service.ts']);
 
   const check = new DatabaseSync(path.join(directory, 'trace.db'));
-  assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 2);
+  assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 3);
+  assert.ok((check.prepare('PRAGMA table_info(workflows)').all() as Array<{ name: string }>).some((column) => column.name === 'feature'));
   check.close();
 
   // An old, incomplete analysis stays editable: replacing keeps the file it already covered.
@@ -165,4 +168,32 @@ test('migrates a version 1 database and reads its old rows without actor, paths 
   const fresh = createDraft(samplePr({ number: 8 }));
   submitWorkflows(fresh.id, fresh.headSha, sampleWorkflows, 'agent', []);
   assert.equal(getAnalysis(fresh.id)!.status, 'ready');
+}));
+
+test('migrates a version 2 database to 3 and keeps its rows, with legacy step paths', () => withStore((directory) => {
+  const old = new DatabaseSync(path.join(directory, 'trace.db'));
+  old.exec(`
+    CREATE TABLE analyses (id TEXT PRIMARY KEY, repository TEXT NOT NULL, number INTEGER NOT NULL, head_sha TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft', 'ready')), source TEXT CHECK (source IN ('agent', 'api')),
+      pr_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, unassigned_json TEXT NOT NULL DEFAULT '[]');
+    CREATE TABLE workflows (analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE, id TEXT NOT NULL, position INTEGER NOT NULL,
+      title TEXT NOT NULL, actor TEXT, entrypoint_kind TEXT NOT NULL, entrypoint_label TEXT NOT NULL, summary TEXT NOT NULL,
+      steps_json TEXT NOT NULL, edges_json TEXT NOT NULL, PRIMARY KEY (analysis_id, id));
+    PRAGMA user_version = 2;`);
+  const id = '22222222-2222-4222-8222-222222222222';
+  old.prepare('INSERT INTO analyses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, 'acme/widget', 7, '0123456789abcdef', 'ready', 'agent', JSON.stringify(samplePr()), 'then', 'then', '[]');
+  old.prepare('INSERT INTO workflows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, 'w1', 1, 'A client lists widgets', 'API client', 'http', 'GET /x', 'Old summary', JSON.stringify([
+    { id: 's1', title: 'Step', summary: 's', path: 'src/api/route.ts', paths: ['src/core/service.ts'], symbols: [], checks: ['c'] }]), '[]');
+  old.close();
+
+  const analysis = getAnalysis(id)!;
+  assert.equal(analysis.workflows[0].feature, undefined);
+  assert.equal(analysis.workflows[0].actor, 'API client');
+  assert.deepEqual(analysis.workflows[0].steps[0].paths, ['src/core/service.ts']);
+  assert.equal(coverage(analysis).uncovered.length, 0);
+  const check = new DatabaseSync(path.join(directory, 'trace.db'));
+  assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 3);
+  check.close();
+  assert.equal(replaceWorkflow(id, 'w1', '0123456789abcdef', sampleWorkflows[0], 'agent').workflows[0].feature, 'An API client lists widgets');
+  assert.equal(getAnalysis(id)!.workflows[0].feature, 'An API client lists widgets');
 }));
