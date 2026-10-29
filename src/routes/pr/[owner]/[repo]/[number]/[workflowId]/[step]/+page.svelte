@@ -153,13 +153,13 @@
 
   const WAIT_MS = 5000;
   let completion = $state<{ target: WorkflowProgress | null } | null>(null);
-  let waited = $state(0);
+  let secondsLeft = $state(WAIT_MS / 1000);
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  let ticker: ReturnType<typeof setInterval> | undefined;
+  let ticker: ReturnType<typeof setTimeout> | undefined;
 
   function cancel() {
     clearTimeout(timeout);
-    clearInterval(ticker);
+    clearTimeout(ticker);
     completion = null;
   }
   function go() {
@@ -172,11 +172,16 @@
     const target = nextWorkflow(order, data.workflow.id);
     cancel();
     completion = { target };
-    waited = 0;
+    secondsLeft = WAIT_MS / 1000;
     if (!target) return;
     const started = performance.now();
-    // The timer runs regardless of motion; reduced motion only makes the bar update once a second.
-    ticker = setInterval(() => (waited = Math.min(WAIT_MS, performance.now() - started)), motionMs(100) === 0 ? 1000 : 100);
+    // Each tick is aimed at the next whole-second boundary of the start timestamp so the text cannot drift.
+    const tick = () => {
+      const elapsed = performance.now() - started;
+      secondsLeft = Math.max(0, Math.ceil((WAIT_MS - elapsed) / 1000));
+      if (elapsed < WAIT_MS) ticker = setTimeout(tick, 1000 - (elapsed % 1000));
+    };
+    ticker = setTimeout(tick, 1000);
     timeout = setTimeout(go, WAIT_MS);
   }
   // Navigating to another step or workflow, or leaving the page, cancels a pending jump.
@@ -302,10 +307,10 @@
         <h2 id="done-title" class="flex items-center gap-2 text-lg font-semibold"><PartyPopper size={18} style="color: var(--a-green)" aria-hidden="true" />{completion.target ? 'Workflow reviewed' : 'All workflows reviewed'}</h2>
         {#if completion.target}
           <p id="done-text" class="mt-2 text-sm text-muted-foreground">Next: <span class="text-foreground">{completion.target.title}</span>{#if completion.target.feature !== completion.target.title}<span class="block font-mono text-[11px]">{completion.target.feature}</span>{/if}</p>
-          <div class="mt-3 h-1.5 overflow-hidden rounded-full" style="background: color-mix(in srgb, var(--a-green) 14%, var(--line))" role="progressbar" aria-label="Time before the next workflow opens" aria-valuemin={0} aria-valuemax={WAIT_MS} aria-valuenow={waited}>
-            <div class="h-full rounded-full" style="width: {(waited / WAIT_MS) * 100}%; background: var(--a-green)"></div>
+          <div class="mt-3 h-1.5 overflow-hidden rounded-full" style="background: color-mix(in srgb, var(--a-green) 14%, var(--line))" role="progressbar" aria-label="Time before the next workflow opens" aria-valuemin={0} aria-valuemax={WAIT_MS / 1000} aria-valuenow={secondsLeft}>
+            {#key completion}<div class="countdown-bar h-full rounded-full" style="background: var(--a-green); animation-duration: {WAIT_MS}ms"></div>{/key}
           </div>
-          <p class="mt-1.5 font-mono text-[11px] text-muted-foreground" aria-live="polite">Opening in {Math.max(0, Math.ceil((WAIT_MS - waited) / 1000))}s</p>
+          <p class="mt-1.5 font-mono text-[11px] text-muted-foreground" aria-live="polite">Opening in {secondsLeft}s</p>
           <div class="mt-4 flex justify-end gap-2">
             <Button variant="outline" size="sm" onclick={cancel}>Stay<kbd class="kbd ml-1.5">Esc</kbd></Button>
             <Button size="sm" onclick={go}>Go now<kbd class="kbd ml-1.5">Enter</kbd></Button>
@@ -423,4 +428,7 @@
   .viewed-toggle.on { color: var(--a-green); border-color: color-mix(in srgb, var(--a-green) 55%, var(--line)); background: color-mix(in srgb, var(--a-green) 10%, transparent); }
   .zoom-on { color: var(--fg); border-color: var(--a-cyan); }
   .pane { background: color-mix(in srgb, var(--a-cyan) 5%, var(--canvas)); border-color: color-mix(in srgb, var(--a-cyan) 28%, var(--line)); }
+  .countdown-bar { transform: scaleX(0); transform-origin: left; will-change: transform; animation: countdown linear forwards; }
+  @keyframes countdown { to { transform: scaleX(1); } }
+  @media (prefers-reduced-motion: reduce) { .countdown-bar { animation: none; transform: scaleX(1); } }
 </style>
