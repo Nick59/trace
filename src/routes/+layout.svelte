@@ -10,14 +10,19 @@
   let githubUrl = $derived(page.data.githubUrl as string | undefined);
   let parent = $derived(crumbs.length - 2);
   let onStep = $derived(Boolean(page.route.id?.includes('[step]')));
+  let onPr = $derived(Boolean(page.route.id?.startsWith('/pr/')) && !page.error);
   let pr = $derived(page.data.pr as { repository: string; number: number; head: string; base: string; headSha: string } | undefined);
   let stepNumber = $derived(page.data.stepNumber as number | undefined);
   let stepCount = $derived(page.data.stepCount as number | undefined);
 </script>
 
+<svelte:head>
+  <style>html { scrollbar-gutter: stable; }</style>
+</svelte:head>
+
 <div class="flex flex-col {onStep ? 'h-dvh overflow-hidden' : 'min-h-dvh'}">
-  <header class="z-30 border-b border-border backdrop-blur-md {onStep ? '' : 'sticky top-0'}" style="background: color-mix(in srgb, var(--topbar) 88%, transparent)">
-    <div class="mx-auto flex h-11 items-center {onStep ? '' : 'max-w-[1120px]'} gap-3 px-4 sm:px-6">
+  <header class="z-30 border-b border-border backdrop-blur-md sticky top-0" style="background: color-mix(in srgb, var(--topbar) 88%, transparent)">
+    <div class="flex h-11 items-center gap-3 px-4 sm:px-6">
       <a href="/" class="flex shrink-0 items-center gap-2 font-mono text-[13px] font-semibold" aria-label="trace home">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <rect x="0.5" y="0.5" width="23" height="23" rx="5" fill="color-mix(in srgb, var(--a-cyan) 14%, var(--canvas))" stroke="color-mix(in srgb, var(--a-cyan) 45%, var(--line))" />
@@ -47,8 +52,9 @@
 
   <div class="flex-1 {onStep ? 'min-h-0' : ''}">{@render children()}</div>
 
+  {#if onPr}
   <footer class="sticky bottom-0 z-30 border-t font-mono text-[11px]" style="background: color-mix(in srgb, var(--a-blue) 11%, var(--canvas)); border-color: color-mix(in srgb, var(--a-blue) 28%, var(--line)); color: color-mix(in srgb, var(--a-blue) 55%, var(--fg))">
-    <div class="mx-auto flex h-6 items-center {onStep ? '' : 'max-w-[1120px]'} gap-4 px-4 sm:px-6">
+    <div class="flex h-6 items-center gap-4 px-4 sm:px-6">
       <span class="inline-flex items-center gap-1.5"><span class="size-1.5 rounded-full" style="background: var(--kind-ui)"></span>local</span>
       {#if pr}
         <span class="min-w-0 truncate">{pr.repository}#{pr.number}</span>
@@ -59,4 +65,5 @@
       {#if stepNumber && stepCount}<span>step {stepNumber}/{stepCount}</span><span class="hidden items-center gap-1 sm:inline-flex" title="↑ ↓ follow the flow, ← → switch branch">{#each [['↑', 'up'], ['↓', 'down'], ['←', 'left'], ['→', 'right']] as const as [key, dir]}<kbd class="kbd" style="height:15px;min-width:15px;opacity:{navHints[dir] ? 1 : 0.35}">{key}</kbd>{/each}</span>{/if}
     </div>
   </footer>
+  {/if}
 </div>

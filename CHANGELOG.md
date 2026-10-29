@@ -27,6 +27,7 @@
 - The app follows the system light or dark color scheme.
 
 ### Changed
+- The top bar is now identical and full-width on every page, and the bottom status bar only appears on pull request and step pages.
 - A workflow is now one technical path through a feature (one request, one outcome) and each step is exactly one file in execution order, so the diff shows a single file; steps allow up to 20 per workflow and submissions can no longer bundle files with `paths` (older analyses still show their file tabs). Recompute the pull request to get the new shape.
 - The database moves to schema version 3 (a nullable `workflows.feature` column) on first start; existing analyses keep working and are grouped under their own workflow titles until recomputed.
 - On the step page, ↓ and ↑ follow the graph (next step along the flow, back to where you came from) and ← and → switch to a sibling branch; the sibling nodes are outlined with dashes and the key hints dim when a direction has no target. Prev/Next keep the linear order; PageUp, PageDown and Space still scroll.
