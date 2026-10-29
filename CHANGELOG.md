@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- A step can now carry line ranges: the step page highlights only the changed blocks that workflow uses and collapses the other changes, linking to the workflows that use them.
+
+### Fixed
+- The collapsed-changes row on a step page stays in view and wraps, labels links by workflow and step, and model-generated workflows no longer fail when a step range misses the changed blocks (the range is dropped).
+
+### Removed
+- The home page no longer lists open pull requests from GitHub; it shows only your analyzed pull requests.
+
+### Fixed
+- The Claude Code register command now uses `--scope user`, so the Trace MCP server is available in every repository, not only the one it was run in.
+- The home page setup panel now spans the same width as the pull request panel, with the intro and "Check again" on the left and the steps on the right on wide screens.
+
+### Changed
+- The home page setup card now sets up the `/trace` skill for Claude Code or Codex (register the MCP server, install the skill, optional app address) instead of asking for `GITHUB_TOKEN`, which is optional; each step is marked done (green number badge and command box) or not done (warning color), and the card collapses to "all set" once a tool is configured and `TRACE_APP_URL` is set.
+
+### Added
+- A `$trace` Codex skill does the same analysis as the Claude Code one, with a per-tool install command on the home and pull request pages.
+- A `/trace` Claude Code skill analyzes a pull request (or recomputes one workflow; run it with no arguments on a PR branch) with the whole PR checked out in a temporary git worktree, and the pull request page shows its command and a one-line install.
+- After the agent submits an analysis, the MCP tools return a link to the pull request in Trace when `TRACE_APP_URL` is set.
 - The home page has an "Analyzed" tab (`/?tab=analyzed`) listing every analyzed pull request with its features, workflows, coverage and review progress, a text and repository filter, and it works without a GitHub token.
 - Open pull requests that have an analysis show their review progress (for example "3/8", with a check when complete).
 - Space on a step page marks the step as viewed (green check on the graph, "5/9 viewed" progress, a "Viewed" button) and goes to the next unviewed step; Shift+Space unmarks it. Viewed steps are saved per analysis.
@@ -33,6 +52,7 @@
 - The app follows the system light or dark color scheme.
 
 ### Changed
+- Each home page setup step shows whether it is done (green check) or still to do (warning color), and the panel stays until the MCP server is registered and the skill installed.
 - Viewed steps now turn the workflow graph node green instead of showing a check mark, steps you leave without pressing Space turn amber (remembered for the browser tab), and the progress line shows "5/9 viewed · 2 skipped".
 - The status bar on a step page shows a labelled keyboard shortcut legend (flow, branch, viewed, unmark; Enter and Esc while the completion overlay is open), with labels dropped below 1280px and the legend hidden below 1024px.
 - Test files are ignored: they are never steps (a submission with a test step is rejected), they do not count toward coverage ("N test files ignored" is shown instead), and test steps in existing analyses are hidden.
@@ -51,6 +71,7 @@
 - The workflow graph now uses the app colors and marks the current step with an accent border, tinted fill and accent label.
 
 ### Fixed
+- The Claude Code register command now uses `--scope user`, so the Trace MCP server is available in every repository, not only the one it was run in.
 - The workflow graph on the step page now fits the pane width (with a 1:1 toggle and Ctrl/Cmd+wheel zoom) instead of being cropped on both sides, and Mermaid is preloaded from the pull request page.
 
 ### Removed

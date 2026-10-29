@@ -1,8 +1,14 @@
 # Trace PR Reviewer
 
-A local SvelteKit app that loads a GitHub pull request and splits it into features and, per feature, technical workflows (one path per outcome, one file per step), each traced through the code step by step.
+Trace is a local SvelteKit app that loads a GitHub pull request and splits it into features (an actor and a goal) and, per feature, technical workflows (one path per outcome, one file per step), each traced through the code step by step. A signed-in Claude Code or Codex CLI does the analysis through a skill and an MCP server, and you review the result in the app.
 
-## Setup
+## Requirements
+
+- Node 24 (needed for `node:sqlite` and `process.loadEnvFile`).
+- `git`, and the GitHub CLI `gh` if you want the skill to find the pull request of your current branch.
+- Claude Code or Codex, signed in.
+
+## Install and run
 
 ```sh
 npm install
@@ -10,21 +16,56 @@ cp .env.example .env
 npm run dev
 ```
 
-Open the local address printed by Vite. `.env` is optional for public pull requests. Set `GITHUB_TOKEN` to access private repositories and avoid the lowest unauthenticated GitHub API rate limit. The token is only used by the server and is never returned to the browser.
+Open the local address printed by Vite. The home page shows a setup card that tracks the steps below.
 
-The GitHub inbox requires `GITHUB_TOKEN`. It loads at most the 20 most recently pushed repositories and 30 recently updated open pull requests per repository; a truncation notice appears when GitHub reports another page. Filter the inbox to one repository with `?repo=owner/name`.
+## Claude Code
 
-## Workflow generation
+Register the MCP server (use `node` directly, not `npm run`, because npm's banner corrupts the stdio protocol), then install the skill. Replace `<repo>` with the absolute path of this checkout.
 
-Workflows are created by a CLI agent through the MCP server (see below) or, when you set all three `WALKTHROUGH_API_KEY`, `WALKTHROUGH_API_URL`, and `WALKTHROUGH_MODEL`, by the model API through a **Generate workflows** action on the PR page. The URL must be the full OpenAI-compatible chat completions endpoint, such as `https://api.openai.com/v1/chat/completions`. The server sends the pull request title and description, up to 35 patches (at most 8,000 characters each), and bounded source snippets (at most 10,000 characters each) to that provider. Provider failures or invalid output return an error; there is no fallback. The API key is never sent to the browser.
+```sh
+claude mcp add --scope user trace -- node <repo>/scripts/mcp-launch.mjs
+mkdir -p ~/.claude/skills && ln -sfn <repo>/skills/trace ~/.claude/skills/trace
+```
 
-Analyses are stored in a SQLite database at `.trace/trace.db` (needs Node 24 for `node:sqlite`). Set `TRACE_DATA_DIR` to change the directory.
+Then, in Claude Code:
+
+```
+/trace                                   # the pull request of the current branch
+/trace https://github.com/OWNER/REPO/pull/NUMBER
+/trace w3 "include the DB write in UserRepository"   # recompute one workflow
+```
+
+## Codex
+
+```sh
+codex mcp add trace -- node <repo>/scripts/mcp-launch.mjs
+mkdir -p ~/.codex/skills && ln -sfn <repo>/skills/codex/trace ~/.codex/skills/trace
+```
+
+Then mention the skill in a Codex prompt:
+
+```
+codex '$trace'
+codex '$trace https://github.com/OWNER/REPO/pull/NUMBER'
+codex '$trace w3 include the DB write in UserRepository'
+```
+
+Both skills analyze the pull request head in a separate git worktree, so your checkout is never touched, and neither edits files, commits, pushes or posts to GitHub. See [CLI agent setup and instructions](docs/cli-agent.md) for details.
+
+## Settings
+
+All settings go in `.env` and are optional (see `.env.example`).
+
+- `GITHUB_TOKEN`: access to private repositories and higher GitHub rate limits. It is only used by the server and never sent to the browser.
+- `TRACE_APP_URL`: the address of this app (for example `http://localhost:5173`); the skills then finish with a link to the pull request.
+- `WALKTHROUGH_API_KEY`, `WALKTHROUGH_API_URL`, `WALKTHROUGH_MODEL`: set all three to add a **Generate workflows** button that uses an OpenAI-compatible model API (the URL is the full `/v1/chat/completions` endpoint) instead of a CLI agent. The server sends the PR title and description, up to 35 patches and bounded source snippets to that provider; provider failures or invalid output return an error, with no fallback.
+- `TRACE_DATA_DIR`: the directory of the SQLite database `trace.db` (default `.trace/`).
 
 ## Limits and trust scope
 
-The API paginates GitHub's changed-file endpoint and reads at most 300 entries. It fetches source at the pull request head SHA for at most 35 candidate text files, with a 48 KB per-file limit and a 420 KB aggregate limit. Binary files and files GitHub cannot serve as text are represented by their diff when available. Source context is fetched from the repository; it may include secrets committed in the PR, so configure an external model only if that data transfer is acceptable.
+The app reads at most 300 changed files per pull request. In the model API mode it fetches source at the head SHA for at most 35 candidate text files, with a 48 KB per-file and a 420 KB aggregate limit. Source context may include secrets committed in the PR, so configure an external model only if that data transfer is acceptable.
 
-This is a local, trusted-user tool. It has no user authentication or authorization boundary and should not be exposed as a public service without adding access controls and operational protections.
+Trace has no authentication or authorization boundary. Run it only on a trusted machine and do not expose it as a public service.
 
 ## Checks
 
@@ -32,7 +73,3 @@ This is a local, trusted-user tool. It has no user authentication or authorizati
 npm run check
 npm test
 ```
-
-## CLI agents (Codex / Claude Code)
-
-Use your signed-in CLI to generate workflows through the local MCP server, without a model API key. See [CLI agent setup and instructions](docs/cli-agent.md). A PR with no workflows shows a ready-to-paste command for Claude Code and Codex.

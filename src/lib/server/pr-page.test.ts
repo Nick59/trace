@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { analysisHistory, cliCommands, loadPrPage, loadWorkflowStep, parsePrParams } from './pr-page';
+import { analysisHistory, cliCommands, loadPrPage, loadWorkflowStep, parsePrParams, setupCommands } from './pr-page';
 import { closeStore, createDraft, markViewed, submitWorkflows } from './store';
 import { samplePr, sampleWorkflows } from './test-fixtures';
 
@@ -40,10 +40,19 @@ test('validates owner, repo and number', () => {
 test('CLI commands embed the PR URL and the absolute launcher path', () => {
   const commands = cliCommands({ owner: 'acme', repo: 'widget', number: 7 });
   const launcher = path.resolve(process.cwd(), 'scripts/mcp-launch.mjs');
-  assert.equal(commands.register.claude, `claude mcp add trace -- node ${launcher}`);
+  assert.equal(commands.register.claude, `claude mcp add --scope user trace -- node ${launcher}`);
   assert.equal(commands.register.codex, `codex mcp add trace -- node ${launcher}`);
-  assert.match(commands.claude, /^claude '.*https:\/\/github\.com\/acme\/widget\/pull\/7.*'$/);
-  assert.match(commands.codex, /^codex '.*trace_workflows.*'$/);
+  assert.equal(commands.claude, "claude '/trace https://github.com/acme/widget/pull/7'");
+  assert.equal(commands.installSkill.claude, `mkdir -p ~/.claude/skills && ln -sfn ${path.resolve(process.cwd(), 'skills/trace')} ~/.claude/skills/trace`);
+  assert.equal(commands.installSkill.codex, `mkdir -p ~/.codex/skills && ln -sfn ${path.resolve(process.cwd(), 'skills/codex/trace')} ~/.codex/skills/trace`);
+  assert.equal(commands.codex, "codex '$trace https://github.com/acme/widget/pull/7'");
+});
+
+test('setup commands carry per-tool register and install commands', () => {
+  const setup = setupCommands();
+  assert.equal(setup.register.codex, `codex mcp add trace -- node ${path.resolve(process.cwd(), 'scripts/mcp-launch.mjs')}`);
+  assert.equal(setup.installSkill.codex, `mkdir -p ~/.codex/skills && ln -sfn ${path.resolve(process.cwd(), 'skills/codex/trace')} ~/.codex/skills/trace`);
+  assert.ok(setup.installSkill.claude.endsWith('~/.claude/skills/trace'));
 });
 
 test('PR page reports workflows and flags an analysis made for an older commit', () => withEnv(async () => {
@@ -188,4 +197,12 @@ test('history counts hide test steps like the PR page', () => withEnv(async () =
   assert.deepEqual([entry.features, entry.workflows], [1, 1]);
   assert.deepEqual(entry.review, { workflows: 1, workflowsViewed: 1, steps: 2, stepsViewed: 2 });
   assert.deepEqual(entry.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], ignoredTests: 1 });
+}));
+
+test('workflow step data lists the other workflows that use the same file, never the current one', () => withEnv(async () => {
+  const draft = createDraft(samplePr());
+  const second = { ...sampleWorkflows[0], title: 'Second', steps: [{ ...sampleWorkflows[0].steps[1], ranges: [{ from: 3, to: 9 }] }, { ...sampleWorkflows[0].steps[0], ranges: [{ from: 1, to: 2 }] }] };
+  submitWorkflows(draft.id, draft.headSha, [sampleWorkflows[0], second], 'agent');
+  assert.deepEqual(loadWorkflowStep('acme', 'widget', '7', 'w1', '1').otherUses, [{ workflowId: 'w2', title: 'Second', step: 2, ranges: [{ from: 1, to: 2 }] }]);
+  assert.deepEqual(loadWorkflowStep('acme', 'widget', '7', 'w2', '1').otherUses, [{ workflowId: 'w1', title: 'GET /widgets', step: 2, ranges: [] }]);
 }));

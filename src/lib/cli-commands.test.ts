@@ -15,29 +15,45 @@ test('shellQuote round-trips hostile input through a real shell', () => {
   assert.equal(shellQuote('/safe/path-1.mjs'), '/safe/path-1.mjs');
 });
 
-test('recompute command carries the workflow id and the instruction as one safe argument', () => {
-  const commands = buildCliCommands('https://github.com/acme/widget/pull/7', '/opt/trace/scripts/mcp-launch.mjs');
-  const hostile = `include the DB write in 'UserRepository'; $(id) \`id\`\nnext "line"`;
+test('recompute commands carry the workflow id and the instruction as one safe argument', () => {
+  const url = 'https://github.com/acme/widget/pull/7';
+  const commands = buildCliCommands(url, '/opt/trace/scripts/mcp-launch.mjs', '/opt/trace/skills/trace', '/opt/trace/skills/codex/trace');
+  const hostile = `include the DB write in 'UserRepository'; $(id) \`id\`\nnext "line" $HOME`;
   const { claude, codex } = commands.recompute('w2', hostile);
-  for (const [tool, command] of [['claude', claude], ['codex', codex]]) {
-    const args = echoArgs(command.replace(new RegExp(`^${tool} `), ''));
-    assert.equal(args.length, 1);
-    assert.match(args[0], /trace_recompute_workflow prompt for https:\/\/github\.com\/acme\/widget\/pull\/7 and workflow w2/);
-    assert.ok(args[0].includes(`"""${hostile}"""`));
-    assert.match(args[0], /Do not modify the repository or post to GitHub/);
-  }
+  const claudeArgs = echoArgs(claude.replace(/^claude /, ''));
+  assert.deepEqual(claudeArgs, [`/trace ${url} w2 ${hostile.replace(/\s+/g, ' ')}`]);
+  const codexArgs = echoArgs(codex.replace(/^codex /, ''));
+  assert.deepEqual(codexArgs, [`$trace ${url} w2 ${hostile.replace(/\s+/g, ' ')}`]);
+});
+
+test('full commands invoke the skills', () => {
+  const url = 'https://github.com/acme/widget/pull/7';
+  const commands = buildCliCommands(url, '/x', '/s', '/c');
+  assert.deepEqual(echoArgs(commands.claude.replace(/^claude /, '')), [`/trace ${url}`]);
+  assert.deepEqual(echoArgs(commands.codex.replace(/^codex /, '')), [`$trace ${url}`]);
+  assert.equal(commands.recompute('w1').claude, `claude '/trace ${url} w1'`);
+  assert.equal(commands.recompute('w1').codex, `codex '$trace ${url} w1'`);
 });
 
 test('recompute command trims, drops NUL bytes, truncates and omits an empty instruction', () => {
-  const commands = buildCliCommands('https://github.com/acme/widget/pull/7', '/x');
+  const commands = buildCliCommands('https://github.com/acme/widget/pull/7', '/x', '/s', '/c');
   assert.equal(commands.recompute('w1', '   ').claude.includes('instruction'), false);
+  assert.equal(commands.recompute('w1', '   ').codex.includes('instruction'), false);
   assert.equal(commands.recompute('w1').claude, commands.recompute('w1', '').claude);
-  const long = commands.recompute('w1', `a\0${'Z'.repeat(INSTRUCTION_MAX + 50)}`).claude;
+  const long = commands.recompute('w1', `a\0${'Z'.repeat(INSTRUCTION_MAX + 50)}`).codex;
   assert.equal(long.includes('\0'), false);
   assert.equal((long.match(/Z/g) ?? []).length, INSTRUCTION_MAX - 1);
 });
 
 test('register commands quote a launcher path with spaces', () => {
-  const commands = buildCliCommands('https://github.com/a/b/pull/1', '/my dir/mcp-launch.mjs');
-  assert.equal(commands.register.claude, "claude mcp add trace -- node '/my dir/mcp-launch.mjs'");
+  const commands = buildCliCommands('https://github.com/a/b/pull/1', '/my dir/mcp-launch.mjs', '/my dir/skills/trace', '/my dir/skills/codex/trace');
+  assert.equal(commands.register.claude, "claude mcp add --scope user trace -- node '/my dir/mcp-launch.mjs'");
+});
+
+test('installSkill symlinks the skill directory per tool, quoting the path but not ~', () => {
+  const commands = buildCliCommands('https://github.com/a/b/pull/1', '/x', '/my dir/skills/trace', '/my dir/skills/codex/trace');
+  assert.equal(commands.installSkill.claude, "mkdir -p ~/.claude/skills && ln -sfn '/my dir/skills/trace' ~/.claude/skills/trace");
+  assert.equal(commands.installSkill.codex, "mkdir -p ~/.codex/skills && ln -sfn '/my dir/skills/codex/trace' ~/.codex/skills/trace");
+  const plain = buildCliCommands('https://github.com/a/b/pull/1', '/x', '/opt/skills/trace', '/opt/skills/codex/trace');
+  assert.equal(plain.installSkill.codex, 'mkdir -p ~/.codex/skills && ln -sfn /opt/skills/codex/trace ~/.codex/skills/trace');
 });

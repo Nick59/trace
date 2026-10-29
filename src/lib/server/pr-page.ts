@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import path from 'node:path';
-import type { AnalysisSource, AnalysisStatus, EntrypointKind, PullRequestSummary, ReviewFile, UnassignedFile, Workflow, WorkflowStep } from '../types';
+import type { AnalysisSource, AnalysisStatus, EntrypointKind, PullRequestSummary, ReviewFile, StepRange, UnassignedFile, Workflow, WorkflowStep } from '../types';
 import { getPullRequestSummary } from './github';
 import { latestAnalysisForPr, listAnalyses, viewsFor } from './store';
 import { buildCliCommands, type CliCommands } from '../cli-commands';
@@ -31,8 +31,10 @@ export interface PrPageData {
   stale: boolean;
   setup: { githubConfigured: boolean; apiConfigured: boolean };
   cliCommands: Omit<CliCommands, 'recompute'>;
-  cliSource: { url: string; launcher: string };
+  cliSource: { url: string; launcher: string; skillDir: string; codexSkillDir: string };
 }
+
+export interface OtherUse { workflowId: string; title: string; step: number; ranges: StepRange[] }
 
 export interface WorkflowStepData {
   params: PrParams;
@@ -48,6 +50,7 @@ export interface WorkflowStepData {
   next: number | null;
   viewedPaths: string[];
   progress: WorkflowProgress[];
+  otherUses: OtherUse[];
 }
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
@@ -65,9 +68,16 @@ const configured = (value: string | undefined) => Boolean(value?.trim() && !valu
 
 const prUrl = (params: PrParams) => `https://github.com/${params.owner}/${params.repo}/pull/${params.number}`;
 const launcherPath = () => path.resolve(process.cwd(), 'scripts', 'mcp-launch.mjs');
+const skillPath = () => path.resolve(process.cwd(), 'skills', 'trace');
+const codexSkillPath = () => path.resolve(process.cwd(), 'skills', 'codex', 'trace');
 
 export function cliCommands(params: PrParams): CliCommands {
-  return buildCliCommands(prUrl(params), launcherPath());
+  return buildCliCommands(prUrl(params), launcherPath(), skillPath(), codexSkillPath());
+}
+
+export function setupCommands(): Pick<CliCommands, 'register' | 'installSkill'> {
+  const commands = buildCliCommands('', launcherPath(), skillPath(), codexSkillPath());
+  return { register: commands.register, installSkill: commands.installSkill };
 }
 
 async function currentSummary(params: PrParams): Promise<PullRequestSummary | undefined> {
@@ -137,8 +147,8 @@ export async function loadPrPage(owner: string, repo: string, number: string | n
     coverage: analysis?.status === 'ready' ? { ...coverage(analysis), unassignedFiles: analysis.unassigned.filter((entry) => !isTestFile(entry.path)) } : null,
     stale: Boolean(live && analysis && live.headSha !== analysis.headSha),
     setup: { githubConfigured: configured(process.env.GITHUB_TOKEN), apiConfigured: workflowApiConfigured() },
-    cliCommands: { claude: commands.claude, codex: commands.codex, register: commands.register },
-    cliSource: { url: prUrl(params), launcher: launcherPath() }
+    cliCommands: { claude: commands.claude, codex: commands.codex, register: commands.register, installSkill: commands.installSkill },
+    cliSource: { url: prUrl(params), launcher: launcherPath(), skillDir: skillPath(), codexSkillDir: codexSkillPath() }
   };
 }
 
@@ -161,6 +171,8 @@ export function loadWorkflowStep(owner: string, repo: string, number: string | n
     mermaid: workflowToMermaid(workflow), file: analysis.pr.files.find((file) => file.path === current.path),
     files: [current.path, ...current.paths].flatMap((filePath) => analysis.pr.files.find((file) => file.path === filePath) ?? []),
     prev: stepNumber > 1 ? stepNumber - 1 : null, next: stepNumber < workflow.steps.length ? stepNumber + 1 : null,
-    viewedPaths: workflow.steps.map((step) => step.path).filter((stepPath) => views.get(workflowId)?.has(stepPath)), progress
+    viewedPaths: workflow.steps.map((step) => step.path).filter((stepPath) => views.get(workflowId)?.has(stepPath)), progress,
+    otherUses: workflows.filter((other) => other.id !== workflowId).flatMap((other) => other.steps.flatMap((otherStep, index) =>
+      otherStep.path === current.path ? [{ workflowId: other.id, title: other.title, step: index + 1, ranges: otherStep.ranges ?? [] }] : []))
   };
 }

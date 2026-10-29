@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { loadPullRequest } from '../src/lib/server/github';
 import { createDraft, getAnalysis, listAnalyses, replaceWorkflow, submitWorkflows } from '../src/lib/server/store';
 import { analysisGuide, singleWorkflowGuide, UNTRUSTED_NOTICE } from '../src/lib/server/analysis-guide';
+import { appUrl } from '../src/lib/server/app-url';
 import { LIMITS } from '../src/lib/server/workflows';
 
 const output = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
@@ -62,7 +63,8 @@ export function createMcpServer(): McpServer {
     entrypoint: z.object({ kind: z.enum(['http', 'cli', 'job', 'event', 'ui', 'other']), label: z.string().min(1).max(LIMITS.label) }).strict(),
     steps: z.array(z.object({
       title: z.string().min(1).max(LIMITS.title), summary: z.string().min(1).max(LIMITS.stepSummary), path: z.string().min(1).max(1024),
-      symbols: z.array(z.string().max(LIMITS.symbol)).max(LIMITS.symbols), checks: z.array(z.string().min(1).max(LIMITS.expect)).min(1).max(LIMITS.expects)
+      symbols: z.array(z.string().max(LIMITS.symbol)).max(LIMITS.symbols), checks: z.array(z.string().min(1).max(LIMITS.expect)).min(1).max(LIMITS.expects),
+      ranges: z.array(z.object({ from: z.number().int().min(1), to: z.number().int().min(1) }).strict()).max(LIMITS.ranges).optional()
     }).strict()).min(1).max(LIMITS.steps),
     edges: z.array(z.object({ from: stepNumber, to: stepNumber, label: z.string().max(LIMITS.edgeLabel).optional() }).strict()).max(LIMITS.edges).optional()
   }).strict();
@@ -75,7 +77,7 @@ export function createMcpServer(): McpServer {
   }, async ({ analysisId, headSha, workflows, unassigned }) => {
     try {
       const record = submitWorkflows(analysisId, headSha, workflows, 'agent', unassigned);
-      return output({ analysisId: record.id, status: record.status, updatedAt: record.updatedAt, workflowCount: record.workflows.length });
+      return output({ analysisId: record.id, status: record.status, updatedAt: record.updatedAt, workflowCount: record.workflows.length, appUrl: appUrl(record.pr.repository, record.pr.number) });
     } catch (error) { return failure(error instanceof Error ? error.message : 'Unable to save workflows.'); }
   });
 
@@ -85,7 +87,7 @@ export function createMcpServer(): McpServer {
   }, async ({ analysisId, workflowId, headSha, workflow }) => {
     try {
       const record = replaceWorkflow(analysisId, workflowId, headSha, workflow, 'agent');
-      return output({ analysisId: record.id, workflowId, status: record.status, updatedAt: record.updatedAt, workflowCount: record.workflows.length });
+      return output({ analysisId: record.id, workflowId, status: record.status, updatedAt: record.updatedAt, workflowCount: record.workflows.length, appUrl: appUrl(record.pr.repository, record.pr.number, workflowId) });
     } catch (error) { return failure(error instanceof Error ? error.message : 'Unable to replace the workflow.'); }
   });
 

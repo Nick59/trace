@@ -7,13 +7,14 @@
 
   let { workflowId, title, endpoint, apiConfigured, source, tool = $bindable('claude'), ondone }: {
     workflowId?: string; title: string; endpoint: string; apiConfigured: boolean;
-    source: { url: string; launcher: string }; tool?: 'claude' | 'codex'; ondone: () => void;
+    source: { url: string; launcher: string; skillDir: string; codexSkillDir: string }; tool?: 'claude' | 'codex'; ondone: () => void;
   } = $props();
 
+  let repository = $derived(source.url.replace(/^https:\/\/github\.com\//, '').replace(/\/pull\/\d+$/, ''));
   let instruction = $state('');
   let busy = $state(false);
   let error = $state('');
-  let commands = $derived(buildCliCommands(source.url, source.launcher));
+  let commands = $derived(buildCliCommands(source.url, source.launcher, source.skillDir, source.codexSkillDir));
   let command = $derived(workflowId ? commands.recompute(workflowId, instruction)[tool] : commands[tool]);
 
   async function run() {
@@ -67,6 +68,9 @@
         <div class="flex flex-col gap-2">
           <p class="m-0 text-sm text-muted-foreground">First time? Register the MCP server once:</p>
           <CommandBlock command={commands.register[tool]} label="{tool} register command" />
+          <p class="m-0 text-sm text-muted-foreground">Then install the {tool === 'claude' ? '/trace' : '$trace'} skill:</p>
+          <CommandBlock command={commands.installSkill[tool]} label="install skill command" />
+          <p class="m-0 text-xs text-muted-foreground">Run it inside a clone of {repository} to reuse it; otherwise the skill clones it.</p>
         </div>
       {/if}
       <div><Button variant="outline" onclick={reload} disabled={busy}>{#if busy}<LoaderCircle class="animate-spin" />{:else}<RefreshCw />{/if}Reload</Button></div>

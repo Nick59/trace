@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Check, Copy } from '@lucide/svelte';
 
-  let { command, label }: { command: string; label?: string } = $props();
+  let { command, label, tone = 'green' }: { command: string; label?: string; tone?: 'green' | 'warning' } = $props();
   let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -13,7 +13,7 @@
   }
 </script>
 
-<div class="panel panel-green">
+<div class="panel panel-{tone}">
   <div class="panel-head" style="min-height:32px">
     <span class="flex gap-1.5" aria-hidden="true"><i class="size-2.5 rounded-full" style="background:#ff5f57"></i><i class="size-2.5 rounded-full" style="background:#febc2e"></i><i class="size-2.5 rounded-full" style="background:#28c840"></i></span>
     <span class="grow truncate dim">{label ?? 'terminal'}</span>
@@ -24,7 +24,7 @@
     </button>
   </div>
   <div class="flex gap-2 px-3 py-2.5 font-mono text-[12.5px] leading-5">
-    <span class="select-none" style="color: var(--a-green)" aria-hidden="true">$</span>
+    <span class="select-none" style="color: var(--p-accent)" aria-hidden="true">$</span>
     <pre class="m-0 min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]" aria-label={label}>{command}</pre>
   </div>
 </div>

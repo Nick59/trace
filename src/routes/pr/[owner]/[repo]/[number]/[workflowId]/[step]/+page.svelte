@@ -367,7 +367,7 @@
           {/each}
         </div>
       {/if}
-      <ReviewDiff file={current} />
+      <ReviewDiff file={current} ranges={current?.path === data.step.path ? data.step.ranges ?? [] : []} otherUses={data.otherUses} baseHref="/pr/{data.params.owner}/{data.params.repo}/{data.params.number}" />
     </section>
   {/key}
 {/snippet}
