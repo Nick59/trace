@@ -1,0 +1,38 @@
+{
+  "name": "trace-pr-reviewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env node_modules/vite/bin/vite.js --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "tsx --test src/lib/*.test.ts src/lib/server/*.test.ts",
+    "start": "node --env-file-if-exists=.env build",
+    "mcp": "node scripts/mcp-launch.mjs"
+  },
+  "dependencies": {
+    "@lucide/svelte": "latest",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "bits-ui": "latest",
+    "clsx": "latest",
+    "mermaid": "12.2.0",
+    "tailwind-merge": "latest",
+    "tailwind-variants": "^3.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "latest",
+    "@sveltejs/kit": "latest",
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "@tailwindcss/vite": "latest",
+    "@types/node": "latest",
+    "svelte": "latest",
+    "svelte-check": "latest",
+    "tailwindcss": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
