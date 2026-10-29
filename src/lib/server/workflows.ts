@@ -1,3 +1,4 @@
+import { isTestFile } from '../test-files';
 import type { Analysis, EntrypointKind, PullRequestSnapshot, UnassignedFile, Workflow, WorkflowEdge, WorkflowStep } from '../types';
 import { analysisGuide, singleWorkflowGuide, UNTRUSTED_NOTICE } from './analysis-guide';
 
@@ -21,7 +22,7 @@ function validSteps(value: unknown, paths: Set<string>, strict: boolean): Workfl
   for (const item of value) {
     // Older analyses hold longer summaries and up to 8 checks; only new submissions get the tight limits.
     if (!isObj(item) || !text(item.title, LIMITS.title) || !text(item.summary, strict ? LIMITS.stepSummary : LIMITS.summary) || typeof item.path !== 'string' ||
-      !paths.has(item.path) || !strings(item.symbols, LIMITS.symbols, LIMITS.symbol) ||
+      !paths.has(item.path) || (strict && isTestFile(item.path)) || !strings(item.symbols, LIMITS.symbols, LIMITS.symbol) ||
       !strings(item.checks, strict ? LIMITS.expects : LIMITS.checks, strict ? LIMITS.expect : LIMITS.check) || (strict && (item.checks as string[]).length < 1)) return;
     const extra = item.paths ?? [];
     if (!strings(extra, LIMITS.paths, 1024) || (strict && extra.length > 0) || new Set(extra).size !== extra.length || extra.some((path) => path === item.path || !paths.has(path))) return;
@@ -92,18 +93,58 @@ export function validUnassigned(value: unknown, changedPaths: Set<string>): Unas
   return entries;
 }
 
-export interface Coverage { total: number; covered: number; unassigned: number; uncovered: string[] }
+export interface Coverage { total: number; covered: number; unassigned: number; uncovered: string[]; ignoredTests: number }
 
 const stepPaths = (workflows: Workflow[]) => new Set(workflows.flatMap((workflow) => workflow.steps.flatMap((step) => [step.path, ...step.paths])));
 
+/** Test files are neither required nor counted: they appear only as `ignoredTests`. */
 export function coverage(analysis: Pick<Analysis, 'pr' | 'workflows' | 'unassigned'>): Coverage {
   const used = stepPaths(analysis.workflows);
   const waived = new Set(analysis.unassigned.map((entry) => entry.path));
-  const paths = analysis.pr.files.map((file) => file.path);
+  const all = analysis.pr.files.map((file) => file.path);
+  const paths = all.filter((path) => !isTestFile(path));
   return { total: paths.length, covered: paths.filter((path) => used.has(path)).length,
     unassigned: paths.filter((path) => !used.has(path) && waived.has(path)).length,
-    uncovered: paths.filter((path) => !used.has(path) && !waived.has(path)) };
+    uncovered: paths.filter((path) => !used.has(path) && !waived.has(path)), ignoredTests: all.length - paths.length };
 }
+
+/** The first test-file path among the raw steps of untrusted workflows, so a submission can be refused with a precise message. */
+export function testStepPath(value: unknown): string | undefined {
+  const list = Array.isArray(value) ? value : isObj(value) ? [value] : [];
+  for (const workflow of list) {
+    if (!isObj(workflow) || !Array.isArray(workflow.steps)) continue;
+    for (const step of workflow.steps) if (isObj(step) && typeof step.path === 'string' && isTestFile(step.path)) return step.path;
+  }
+}
+
+export const testStepMessage = (path: string) => `Step path ${path} is a test file. Test files are never steps and need no coverage; remove that step.`;
+
+/**
+ * Older analyses may hold test steps. Rebuilds the workflow without them: edges around a removed step are joined (a→test→b becomes a→b
+ * with the first label found), and step ids are renumbered. A workflow left with no step is hidden (undefined).
+ */
+export function hideTestSteps(workflow: Workflow): Workflow | undefined {
+  const removed = workflow.steps.filter((step) => isTestFile(step.path)).map((step) => step.id);
+  if (removed.length === 0) return workflow;
+  let edges = workflow.edges.map((edge) => ({ ...edge }));
+  for (const id of removed) {
+    const incoming = edges.filter((edge) => edge.to === id);
+    const outgoing = edges.filter((edge) => edge.from === id);
+    edges = edges.filter((edge) => edge.to !== id && edge.from !== id);
+    for (const a of incoming) for (const b of outgoing) {
+      if (a.from === b.to || edges.some((edge) => edge.from === a.from && edge.to === b.to)) continue;
+      const label = a.label ?? b.label;
+      edges.push(label ? { from: a.from, to: b.to, label } : { from: a.from, to: b.to });
+    }
+  }
+  const kept = workflow.steps.filter((step) => !removed.includes(step.id));
+  if (kept.length === 0) return undefined;
+  const renamed = new Map(kept.map((step, index) => [step.id, `s${index + 1}`]));
+  return { ...workflow, steps: kept.map((step) => ({ ...step, id: renamed.get(step.id)! })),
+    edges: edges.map((edge) => ({ ...edge, from: renamed.get(edge.from)!, to: renamed.get(edge.to)! })) };
+}
+
+export const visibleWorkflows = (workflows: Workflow[]): Workflow[] => workflows.flatMap((workflow) => hideTestSteps(workflow) ?? []);
 
 const pathList = (paths: string[]) => paths.slice(0, 50).join(', ') + (paths.length > 50 ? `, +${paths.length - 50} more` : '');
 

@@ -53,7 +53,7 @@ A **step** is exactly one file, in the order the request executes it: route regi
 - `checks` (1 to 4, at most 140 characters each): what this file's code should do here, phrased as the expected outcome and not as review homework (good: "Refuses a collar already linked to another dog with 409"; bad: "Verify the error handling").
 - `symbols` (at most 8, 100 characters each): the functions or classes of this file that take part in the flow.
 
-The test file that verifies the path is the last step of that workflow, with a summary that starts with "Verified by". One test file per step: if several test files verify the path, give each its own step.
+Test files (a `test/`, `tests/`, `__tests__/`, `spec/`, `specs/` or `e2e/` directory, or names such as `*.test.*`, `*.spec.*`, `*_test.go`, `test_*.py`, `*_spec.rb`) are never steps and never need coverage: a submission with a test file as a step is rejected, and Trace ignores test files in its coverage check, so leave them out of `unassigned` too.
 
 ### Method
 
@@ -62,7 +62,7 @@ Follow these steps in order.
 1. Read the PR title and description, then the user-facing surfaces the PR touches (routes, CLI commands, jobs, events, UI). List the features the PR adds or changes, each as actor plus goal.
 2. For each feature, list its distinct technical paths: one for each outcome that runs through different code. Name each path by its outcome.
 3. For each path, walk the code file by file in execution order and write one step per file. Say what the file does in this flow and what the PR changed in it.
-4. Check coverage against the full list of changed files, not only the ones you read in detail. Every changed file must be the `path` of a step in at least one workflow. A leftover file usually means a missing path or a missing step: add the workflow or the step. Only a file with no runtime behavior (lockfiles, generated files, formatting-only changes, docs, CI configuration) goes into `unassigned`, each with a reason of at most 160 characters.
+4. Check coverage against the full list of changed files, not only the ones you read in detail. Every changed file that is not a test file must be the `path` of a step in at least one workflow. A leftover file usually means a missing path or a missing step: add the workflow or the step. Only a file with no runtime behavior (lockfiles, generated files, formatting-only changes, docs, CI configuration) goes into `unassigned`, each with a reason of at most 160 characters.
 5. Submit. A submission that leaves changed files uncovered is rejected with the list of uncovered paths. Add a step or a workflow for each of them and submit again.
 
 Name only symbols supported by the code, and state uncertainty in the summary when the supplied context is insufficient. Do not claim tests ran unless you have execution evidence.
@@ -77,7 +77,7 @@ The top-level `unassigned` list holds { `path`, `reason` } entries, at most 300.
 
 ### Worked example
 
-An invented library app. The PR lets a member renew a loan and changes nine files: src/routes/loans.ts, src/controllers/renew-loan.ts, src/schemas/renew-loan.schema.ts, src/usecases/renew-loan.ts, src/models/loan.ts, src/repositories/loan-repository.ts, src/http/error-mapper.ts, tests/renew-loan.test.ts, plus package-lock.json. There is one feature, "A member renews a borrowed book", with two technical paths and so two workflows: the renewal succeeds, or it is refused because the book is reserved. Each workflow walks its own files one step per file, in execution order, and ends with the test. The route, the controller, the use case and the test appear in both because both requests go through them. The lockfile is the only `unassigned` entry.
+An invented library app. The PR lets a member renew a loan and changes nine files: src/routes/loans.ts, src/controllers/renew-loan.ts, src/schemas/renew-loan.schema.ts, src/usecases/renew-loan.ts, src/models/loan.ts, src/repositories/loan-repository.ts, src/http/error-mapper.ts, package-lock.json, plus a test file, tests/renew-loan.test.ts, which is ignored. There is one feature, "A member renews a borrowed book", with two technical paths and so two workflows: the renewal succeeds, or it is refused because the book is reserved. Each workflow walks its own files one step per file, in execution order. The route, the controller and the use case appear in both because both requests go through them. The test file is not a step anywhere. The lockfile is the only `unassigned` entry.
 
 ```json
 {
@@ -162,17 +162,6 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "checks": [
             "Saves the due date and the count in the same write"
           ]
-        },
-        {
-          "title": "Verified by the renewal tests",
-          "summary": "Verified by tests that renew an open loan and check the saved due date.",
-          "path": "tests/renew-loan.test.ts",
-          "symbols": [
-            "renews an open loan"
-          ],
-          "checks": [
-            "Fails if the due date does not move 14 days"
-          ]
         }
       ]
     },
@@ -231,17 +220,6 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "checks": [
             "Answers 409 with the reason \"book reserved\""
           ]
-        },
-        {
-          "title": "Verified by the renewal tests",
-          "summary": "Verified by a test that renews a reserved book and expects the 409.",
-          "path": "tests/renew-loan.test.ts",
-          "symbols": [
-            "refuses a reserved book"
-          ],
-          "checks": [
-            "Fails if the response is not 409 or the due date changed"
-          ]
         }
       ],
       "edges": [
@@ -257,10 +235,6 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "from": 3,
           "to": 4,
           "label": "reserved → 409"
-        },
-        {
-          "from": 4,
-          "to": 5
         }
       ]
     }

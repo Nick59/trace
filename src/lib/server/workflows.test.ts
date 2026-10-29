@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { samplePr, sampleWorkflows } from './test-fixtures';
 import { analysisGuide } from './analysis-guide';
-import { coverage, coverageError, generateWorkflows, LIMITS, validUnassigned, validWorkflow, validWorkflows, workflowApiConfigured, WorkflowGenerationError, workflowToMermaid } from './workflows';
+import { coverage, coverageError, generateWorkflows, hideTestSteps, LIMITS, testStepPath, visibleWorkflows, validUnassigned, validWorkflow, validWorkflows, workflowApiConfigured, WorkflowGenerationError, workflowToMermaid } from './workflows';
 
 const paths = new Set(['src/api/route.ts', 'src/core/service.ts']);
 
@@ -135,8 +135,8 @@ test('unassigned entries must be unique changed files with a short reason', () =
 test('coverage counts used, unassigned and uncovered files and lists them in the error', () => {
   const pr = samplePr();
   const workflows = validWorkflows([{ ...sampleWorkflows[0], steps: [step] }], paths)!;
-  assert.deepEqual(coverage({ pr, workflows, unassigned: [] }), { total: 2, covered: 1, unassigned: 0, uncovered: ['src/core/service.ts'] });
-  assert.deepEqual(coverage({ pr, workflows, unassigned: [{ path: 'src/core/service.ts', reason: 'r' }] }), { total: 2, covered: 1, unassigned: 1, uncovered: [] });
+  assert.deepEqual(coverage({ pr, workflows, unassigned: [] }), { total: 2, covered: 1, unassigned: 0, uncovered: ['src/core/service.ts'], ignoredTests: 0 });
+  assert.deepEqual(coverage({ pr, workflows, unassigned: [{ path: 'src/core/service.ts', reason: 'r' }] }), { total: 2, covered: 1, unassigned: 1, uncovered: [], ignoredTests: 0 });
   assert.match(coverageError(undefined, { pr, workflows, unassigned: [] })!, /leaves 1 changed file uncovered: src\/core\/service\.ts/);
   assert.equal(coverageError(undefined, { pr, workflows: validWorkflows(sampleWorkflows, paths)!, unassigned: [] }), undefined);
   const many = samplePr({ files: Array.from({ length: 53 }, (_, index) => ({ path: `f${index}.ts`, status: 'added', additions: 1, deletions: 0, patch: '' })) });
@@ -147,7 +147,9 @@ test('coverage counts used, unassigned and uncovered files and lists them in the
 
 test('the guide teaches features, one file per step and carries a worked example without paths', () => {
   const guide = analysisGuide(LIMITS);
-  for (const phrase of [/one file per step/, /A \*\*feature\*\*/, /actor plus a goal/, /uncovered/, /unassigned/, /There is no limit on the number of workflows/, /Worked example/, /reserved → 409/, /Verified by/]) assert.match(guide, phrase);
+  for (const phrase of [/one file per step/, /A \*\*feature\*\*/, /actor plus a goal/, /uncovered/, /unassigned/, /There is no limit on the number of workflows/, /Worked example/, /reserved → 409/, /never steps and never need coverage/]) assert.match(guide, phrase);
+  assert.doesNotMatch(guide, /Verified by/);
+  assert.doesNotMatch(guide, /"path": "tests\//);
   assert.doesNotMatch(guide, /business scenario/);
   const example = JSON.parse(guide.slice(guide.lastIndexOf('```json') + 7, guide.lastIndexOf('```')));
   assert.equal(example.workflows.length, 2);
@@ -171,4 +173,56 @@ test('new submissions need a one-sentence summary and 1-4 short checks, while st
   assert.equal(withSteps([{ ...step, checks: ['z'.repeat(141)] }]), undefined);
   assert.equal(validWorkflows([{ ...sampleWorkflows[0], steps: [long] }], paths)?.[0].steps[0].checks.length, 8);
   assert.equal(validWorkflows([{ ...sampleWorkflows[0], steps: [{ ...step, checks: [] }] }], paths)?.[0].steps[0].checks.length, 0);
+});
+
+test('strict validation rejects a test file as a step, while stored rows still read', () => {
+  const testPaths = new Set([...paths, 'tests/route.test.ts']);
+  const testStep = { title: 'Verified', summary: 'Covers it.', path: 'tests/route.test.ts', symbols: [], checks: ['Passes'] };
+  const withTest = [{ ...sampleWorkflows[0], steps: [...sampleWorkflows[0].steps, testStep] }];
+  assert.equal(validWorkflows(withTest, testPaths, true), undefined);
+  assert.equal(validWorkflows(withTest, testPaths)?.[0].steps.length, 3);
+  assert.equal(testStepPath(withTest), 'tests/route.test.ts');
+  assert.equal(testStepPath(sampleWorkflows), undefined);
+  assert.equal(testStepPath('nonsense'), undefined);
+});
+
+test('coverage ignores test files: not counted, not uncovered, reported as ignoredTests', () => {
+  const pr = samplePr({ files: [...samplePr().files, { path: 'src/core/service.test.ts', status: 'added', additions: 1, deletions: 0, patch: '' }] });
+  const workflows = validWorkflows(sampleWorkflows, paths)!;
+  assert.deepEqual(coverage({ pr, workflows, unassigned: [] }), { total: 2, covered: 2, unassigned: 0, uncovered: [], ignoredTests: 1 });
+  assert.equal(coverageError(undefined, { pr, workflows, unassigned: [] }), undefined);
+  assert.deepEqual(coverage({ pr, workflows: [], unassigned: [] }).uncovered, ['src/api/route.ts', 'src/core/service.ts']);
+});
+
+const legacy = (ids: string[], edges: Array<[string, string, string?]>, testIds: string[]) => ({
+  id: 'w2', position: 2, title: 'T', entrypoint: { kind: 'http' as const, label: 'x' }, summary: 's',
+  steps: ids.map((id) => ({ id, title: id, summary: '', path: testIds.includes(id) ? `tests/${id}.test.ts` : `src/${id}.ts`, paths: [], symbols: [], checks: [] })),
+  edges: edges.map(([from, to, label]) => label ? { from, to, label } : { from, to })
+});
+
+test('hideTestSteps drops test steps, joins edges around them and renumbers', () => {
+  const workflow = legacy(['s1', 's2', 's3', 's4'], [['s1', 's2'], ['s2', 's3', 'then'], ['s3', 's4']], ['s2']);
+  const result = hideTestSteps(workflow)!;
+  assert.deepEqual(result.steps.map((step) => [step.id, step.path]), [['s1', 'src/s1.ts'], ['s2', 'src/s3.ts'], ['s3', 'src/s4.ts']]);
+  assert.deepEqual(result.edges, [{ from: 's2', to: 's3' }, { from: 's1', to: 's2', label: 'then' }]);
+  assert.deepEqual([result.id, result.position], ['w2', 2]);
+  assert.equal(hideTestSteps(workflow)?.steps.length, 3);
+  assert.equal(workflow.steps.length, 4);
+});
+
+test('hideTestSteps keeps the first label, handles chains and forks, and skips self loops', () => {
+  const chain = hideTestSteps(legacy(['s1', 's2', 's3', 's4'], [['s1', 's2', 'first'], ['s2', 's3', 'second'], ['s3', 's4']], ['s2', 's3']))!;
+  assert.deepEqual(chain.edges, [{ from: 's1', to: 's2', label: 'first' }]);
+  const fork = hideTestSteps(legacy(['s1', 's2', 's3', 's4'], [['s1', 's2'], ['s2', 's3'], ['s2', 's4', 'alt']], ['s2']))!;
+  assert.deepEqual(fork.edges, [{ from: 's1', to: 's2' }, { from: 's1', to: 's3', label: 'alt' }]);
+  const loop = hideTestSteps(legacy(['s1', 's2'], [['s1', 's2'], ['s2', 's1']], ['s2']))!;
+  assert.deepEqual(loop.edges, []);
+});
+
+test('a workflow made only of test steps is hidden and others are untouched', () => {
+  const onlyTests = legacy(['s1', 's2'], [['s1', 's2']], ['s1', 's2']);
+  const normal = { ...legacy(['s1', 's2'], [['s1', 's2']], []), id: 'w1', position: 1 };
+  assert.equal(hideTestSteps(onlyTests), undefined);
+  assert.deepEqual(visibleWorkflows([normal, onlyTests]).map((workflow) => workflow.id), ['w1']);
+  assert.equal(hideTestSteps(normal), normal);
 });

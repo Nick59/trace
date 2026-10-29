@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { ChevronRight, RefreshCw } from '@lucide/svelte';
+  import { Check, ChevronRight, RefreshCw } from '@lucide/svelte';
   import KindBadge from './KindBadge.svelte';
   import { kindMeta } from '$lib/kinds';
   import type { WorkflowSummary } from '$lib/server/pr-page';
@@ -20,6 +20,11 @@
       {#if workflow.entrypoint.label !== workflow.title}<span class="block font-mono text-[11.5px] [overflow-wrap:anywhere]" style="color: var(--k)">{workflow.entrypoint.label}</span>{/if}
     </span>
     <span class="shrink-0 font-mono text-xs text-muted-foreground">{workflow.stepCount} {workflow.stepCount === 1 ? 'step' : 'steps'}</span>
+    {#if workflow.stepCount > 0 && workflow.viewed >= workflow.stepCount}
+      <span class="inline-flex shrink-0 items-center gap-1 font-mono text-xs" style="color: var(--a-green)" title="Every step viewed"><Check size={12} aria-hidden="true" />reviewed</span>
+    {:else}
+      <span class="shrink-0 font-mono text-xs text-muted-foreground" title="Steps viewed">{workflow.viewed}/{workflow.stepCount}</span>
+    {/if}
     <ChevronRight size={16} class="chev shrink-0 text-muted-foreground" aria-hidden="true" />
   </a>
   {#if ontoggle}

@@ -3,12 +3,12 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Analysis, AnalysisSource, AnalysisStatus, PullRequestSnapshot, UnassignedFile, Workflow } from '../types';
-import { coverageError, validUnassigned, validWorkflow, validWorkflows } from './workflows';
+import { coverageError, testStepMessage, testStepPath, validUnassigned, validWorkflow, validWorkflows } from './workflows';
 
 export interface AnalysisSummary { id: string; title: string; repository: string; number: number; headSha: string; status: AnalysisStatus; source: AnalysisSource | null; workflowCount: number; updatedAt: string }
 
 const MAX_RECORD_BYTES = 5 * 1024 * 1024;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const databases = new Map<string, DatabaseSync>();
@@ -22,7 +22,7 @@ function addColumn(db: DatabaseSync, table: string, column: string, definition: 
   if (!columns.some((candidate) => candidate.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
-// Older databases lack the columns added for business workflows (v2: actor, unassigned) and features (v3). The web app and the MCP server can both
+// Older databases lack the columns added for business workflows (v2: actor, unassigned) and features (v3); v4 adds the step_views table, created with the other tables. The web app and the MCP server can both
 // start at once, so the check and the version bump run inside one write transaction.
 function migrate(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
@@ -59,6 +59,10 @@ function open(): DatabaseSync {
       analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE, id TEXT NOT NULL, position INTEGER NOT NULL,
       title TEXT NOT NULL, feature TEXT, actor TEXT, entrypoint_kind TEXT NOT NULL, entrypoint_label TEXT NOT NULL, summary TEXT NOT NULL,
       steps_json TEXT NOT NULL, edges_json TEXT NOT NULL, PRIMARY KEY (analysis_id, id)
+    );
+    CREATE TABLE IF NOT EXISTS step_views (
+      analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE, workflow_id TEXT NOT NULL, step_path TEXT NOT NULL, viewed_at TEXT NOT NULL,
+      PRIMARY KEY (analysis_id, workflow_id, step_path)
     );
   `);
   if (version < SCHEMA_VERSION) migrate(db);
@@ -142,6 +146,8 @@ export function submitWorkflows(id: string, headSha: string, workflows: unknown,
   if (!existing) throw new Error('Analysis not found.');
   if (headSha !== existing.headSha) throw new Error('Head SHA does not match this draft analysis.');
   const changed = new Set(existing.pr.files.map((file) => file.path));
+  const testPath = testStepPath(workflows);
+  if (testPath) throw new Error(testStepMessage(testPath));
   const valid = validWorkflows(workflows, changed, true);
   if (!valid) throw new Error('Workflows are invalid, have no feature or actor, use legacy paths, or refer to unknown paths.');
   const unassigned = validUnassigned(unassignedInput, changed);
@@ -157,6 +163,7 @@ export function submitWorkflows(id: string, headSha: string, workflows: unknown,
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('DELETE FROM workflows WHERE analysis_id = ?').run(id);
+    db.prepare('DELETE FROM step_views WHERE analysis_id = ?').run(id);
     const insert = db.prepare('INSERT INTO workflows (analysis_id, id, position, title, feature, actor, entrypoint_kind, entrypoint_label, summary, steps_json, edges_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const { workflow, steps, edges } of rows) {
       insert.run(id, workflow.id, workflow.position, workflow.title, workflow.feature ?? null, workflow.actor ?? null, workflow.entrypoint.kind, workflow.entrypoint.label, workflow.summary, steps, edges);
@@ -177,6 +184,8 @@ export function replaceWorkflow(analysisId: string, workflowId: string, headSha:
   const current = existing.workflows.find((candidate) => candidate.id === workflowId);
   if (!current) throw new Error('Workflow not found.');
   if (headSha !== existing.headSha) throw new Error('Head SHA does not match this analysis.');
+  const testPath = testStepPath(workflow);
+  if (testPath) throw new Error(testStepMessage(testPath));
   const valid = validWorkflow(workflow, new Set(existing.pr.files.map((file) => file.path)), current.position, true);
   if (!valid) throw new Error('Workflow is invalid, has no feature or actor, uses legacy paths, or refers to unknown paths.');
   const workflows = existing.workflows.map((candidate) => candidate.id === workflowId ? valid : candidate);
@@ -192,6 +201,7 @@ export function replaceWorkflow(analysisId: string, workflowId: string, headSha:
   try {
     db.prepare('UPDATE workflows SET title = ?, feature = ?, actor = ?, entrypoint_kind = ?, entrypoint_label = ?, summary = ?, steps_json = ?, edges_json = ? WHERE analysis_id = ? AND id = ?')
       .run(valid.title, valid.feature ?? null, valid.actor ?? null, valid.entrypoint.kind, valid.entrypoint.label, valid.summary, steps, edges, analysisId, workflowId);
+    db.prepare('DELETE FROM step_views WHERE analysis_id = ? AND workflow_id = ?').run(analysisId, workflowId);
     db.prepare('UPDATE analyses SET source = ?, updated_at = ? WHERE id = ?').run(source, now, analysisId);
     db.exec('COMMIT');
   } catch (error) {
@@ -199,6 +209,28 @@ export function replaceWorkflow(analysisId: string, workflowId: string, headSha:
     throw error;
   }
   return { ...existing, source, workflows, updatedAt: now };
+}
+
+export function markViewed(analysisId: string, workflowId: string, stepPath: string): void {
+  assertId(analysisId);
+  open().prepare('INSERT INTO step_views (analysis_id, workflow_id, step_path, viewed_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING')
+    .run(analysisId, workflowId, stepPath, new Date().toISOString());
+}
+
+export function unmarkViewed(analysisId: string, workflowId: string, stepPath: string): void {
+  assertId(analysisId);
+  open().prepare('DELETE FROM step_views WHERE analysis_id = ? AND workflow_id = ? AND step_path = ?').run(analysisId, workflowId, stepPath);
+}
+
+export function viewsFor(analysisId: string): Map<string, Set<string>> {
+  assertId(analysisId);
+  const rows = open().prepare('SELECT workflow_id, step_path FROM step_views WHERE analysis_id = ?').all(analysisId) as Array<{ workflow_id: string; step_path: string }>;
+  const views = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const paths = views.get(row.workflow_id);
+    if (paths) paths.add(row.step_path); else views.set(row.workflow_id, new Set([row.step_path]));
+  }
+  return views;
 }
 
 export function listAnalyses(): AnalysisSummary[] {

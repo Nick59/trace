@@ -62,7 +62,7 @@
         <span class="hidden sm:inline">{pr.headSha.slice(0, 7)}</span>
       {/if}
       <span class="flex-1"></span>
-      {#if stepNumber && stepCount}<span>step {stepNumber}/{stepCount}</span><span class="hidden items-center gap-1 sm:inline-flex" title="↑ ↓ follow the flow, ← → switch branch">{#each [['↑', 'up'], ['↓', 'down'], ['←', 'left'], ['→', 'right']] as const as [key, dir]}<kbd class="kbd" style="height:15px;min-width:15px;opacity:{navHints[dir] ? 1 : 0.35}">{key}</kbd>{/each}</span>{/if}
+      {#if stepNumber && stepCount}<span class="hidden items-center gap-1 sm:inline-flex" title="Space marks the step viewed and goes to the next unviewed one, Shift+Space unmarks"><kbd class="kbd" style="height:15px">Space</kbd>viewed</span><span>step {stepNumber}/{stepCount}</span><span class="hidden items-center gap-1 sm:inline-flex" title="↑ ↓ follow the flow, ← → switch branch">{#each [['↑', 'up'], ['↓', 'down'], ['←', 'left'], ['→', 'right']] as const as [key, dir]}<kbd class="kbd" style="height:15px;min-width:15px;opacity:{navHints[dir] ? 1 : 0.35}">{key}</kbd>{/each}</span>{/if}
     </div>
   </footer>
   {/if}

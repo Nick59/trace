@@ -5,7 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { cliCommands, loadPrPage, loadWorkflowStep, parsePrParams } from './pr-page';
-import { closeStore, createDraft, submitWorkflows } from './store';
+import { closeStore, createDraft, markViewed, submitWorkflows } from './store';
 import { samplePr, sampleWorkflows } from './test-fixtures';
 
 async function withEnv(run: () => Promise<void>): Promise<void> {
@@ -58,7 +58,7 @@ test('PR page reports workflows and flags an analysis made for an older commit',
   assert.equal(fresh.stale, false);
   assert.deepEqual(fresh.features.map((group) => [group.feature, group.actor, group.workflows.map((workflow) => [workflow.id, workflow.stepCount, workflow.entrypoint.kind])]),
     [['An API client lists widgets', 'API client', [['w1', 2, 'http']]]]);
-  assert.deepEqual(fresh.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], unassignedFiles: [] });
+  assert.deepEqual(fresh.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], ignoredTests: 0, unassignedFiles: [] });
   assert.equal(empty.coverage, null);
   stubHead('ffffffff');
   assert.equal((await loadPrPage('acme', 'widget', '7')).stale, true);
@@ -99,7 +99,7 @@ test('PR page shows the coverage of an old incomplete analysis', () => withEnv(a
   submitWorkflows(draft.id, draft.headSha, [{ ...sampleWorkflows[0], steps: [sampleWorkflows[0].steps[0]] }], 'agent',
     [{ path: 'src/core/service.ts', reason: 'Generated file.' }]);
   const data = await loadPrPage('acme', 'widget', '7');
-  assert.deepEqual(data.coverage, { total: 2, covered: 1, unassigned: 1, uncovered: [], unassignedFiles: [{ path: 'src/core/service.ts', reason: 'Generated file.' }] });
+  assert.deepEqual(data.coverage, { total: 2, covered: 1, unassigned: 1, uncovered: [], ignoredTests: 0, unassignedFiles: [{ path: 'src/core/service.ts', reason: 'Generated file.' }] });
 }));
 
 test('PR page groups workflows by feature in order of first appearance, and a workflow without feature falls back to its title', () => withEnv(async () => {
@@ -109,4 +109,40 @@ test('PR page groups workflows by feature in order of first appearance, and a wo
   const data = await loadPrPage('acme', 'widget', '7');
   assert.deepEqual(data.features.map((group) => [group.feature, group.workflows.map((workflow) => workflow.id)]),
     [['An API client lists widgets', ['w1', 'w3']], ['Other feature', ['w2']]]);
+}));
+
+const testFile = { path: 'tests/route.test.ts', status: 'added', additions: 1, deletions: 0, patch: '' };
+
+test('legacy test steps are hidden on the PR page and the step page, and test files are ignored in coverage', () => withEnv(async () => {
+  stubHead('0123456789abcdef');
+  const draft = createDraft(samplePr({ files: [...samplePr().files, testFile] }));
+  submitWorkflows(draft.id, draft.headSha, sampleWorkflows, 'agent');
+  const db = new DatabaseSync(path.join(process.env.TRACE_DATA_DIR!, 'trace.db'));
+  const steps = [...sampleWorkflows[0].steps, { title: 'Verified', summary: 'Tests.', path: testFile.path, symbols: [], checks: ['ok'] }].map((step, index) => ({ id: `s${index + 1}`, paths: [], ...step }));
+  db.prepare('UPDATE workflows SET steps_json = ?, edges_json = ? WHERE analysis_id = ?').run(JSON.stringify(steps), JSON.stringify([{ from: 's1', to: 's2' }, { from: 's2', to: 's3' }]), draft.id);
+  db.prepare('UPDATE analyses SET unassigned_json = ? WHERE id = ?').run(JSON.stringify([{ path: testFile.path, reason: 'tests' }]), draft.id);
+  db.prepare('INSERT INTO workflows SELECT analysis_id, ?, 2, title, feature, actor, entrypoint_kind, entrypoint_label, summary, ?, ? FROM workflows WHERE id = ?')
+    .run('w2', JSON.stringify([steps[2]]), '[]', 'w1');
+  db.close();
+  const page = await loadPrPage('acme', 'widget', '7');
+  assert.deepEqual(page.features.flatMap((group) => group.workflows.map((workflow) => [workflow.id, workflow.stepCount])), [['w1', 2]]);
+  assert.deepEqual(page.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], ignoredTests: 1, unassignedFiles: [] });
+  const last = loadWorkflowStep('acme', 'widget', '7', 'w1', '2');
+  assert.deepEqual([last.stepCount, last.next], [2, null]);
+  assert.throws(() => loadWorkflowStep('acme', 'widget', '7', 'w1', '3'), (error: { status?: number }) => error.status === 404);
+  assert.throws(() => loadWorkflowStep('acme', 'widget', '7', 'w2', '1'), (error: { status?: number }) => error.status === 404);
+}));
+
+test('viewed steps show up as counts on the PR page and as sets and PR-ordered progress on the step page', () => withEnv(async () => {
+  stubHead('0123456789abcdef');
+  const draft = createDraft(samplePr());
+  submitWorkflows(draft.id, draft.headSha, [sampleWorkflows[0], { ...sampleWorkflows[0], feature: 'Other', title: 'B' }, { ...sampleWorkflows[0], title: 'C' }], 'agent');
+  markViewed(draft.id, 'w1', 'src/api/route.ts');
+  markViewed(draft.id, 'w3', 'src/api/route.ts');
+  markViewed(draft.id, 'w3', 'src/core/service.ts');
+  const page = await loadPrPage('acme', 'widget', '7');
+  assert.deepEqual(page.features.map((group) => group.workflows.map((workflow) => [workflow.id, workflow.viewed])), [[['w1', 1], ['w3', 2]], [['w2', 0]]]);
+  const step = loadWorkflowStep('acme', 'widget', '7', 'w1', '1');
+  assert.deepEqual(step.viewedPaths, ['src/api/route.ts']);
+  assert.deepEqual(step.progress.map((entry) => [entry.id, entry.total, entry.viewed, entry.firstUnviewed]), [['w1', 2, 1, 2], ['w3', 2, 2, null], ['w2', 2, 0, 1]]);
 }));

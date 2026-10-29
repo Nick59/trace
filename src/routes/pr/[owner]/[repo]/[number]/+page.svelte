@@ -18,6 +18,8 @@
   let base = $derived(`/pr/${data.params.owner}/${data.params.repo}/${data.params.number}`);
   let workflowCount = $derived(data.features.reduce((sum, group) => sum + group.workflows.length, 0));
   let hasWorkflows = $derived(workflowCount > 0);
+  const reviewed = (workflow: { stepCount: number; viewed: number }) => workflow.stepCount > 0 && workflow.viewed >= workflow.stepCount;
+  let reviewedCount = $derived(data.features.reduce((sum, group) => sum + group.workflows.filter(reviewed).length, 0));
   let accounted = $derived(data.coverage ? data.coverage.covered + data.coverage.unassigned : 0);
   let complete = $derived(data.coverage ? data.coverage.uncovered.length === 0 : false);
   let showUncovered = $state(false);
@@ -112,9 +114,10 @@
     {#if hasWorkflows}
       <div class="panel panel-cyan">
         <div class="panel-head">
-          <span class="tab">Workflows</span><span class="dim">{workflowCount}</span>
+          <span class="tab">Workflows</span><span class="dim">{workflowCount}</span><span class="dim" title="Workflows with every step viewed">{reviewedCount}/{workflowCount} reviewed</span>
           {#if data.coverage && data.coverage.total > 0}
             <span class="cov {complete ? 'ok' : 'gap'}" title={complete ? 'Every changed file is in a workflow or listed as unassigned' : 'Some changed files are in no workflow'}>{accounted}/{data.coverage.total} files</span>
+            {#if data.coverage.ignoredTests > 0}<span class="dim">{data.coverage.ignoredTests} test {data.coverage.ignoredTests === 1 ? 'file' : 'files'} ignored</span>{/if}
           {/if}
           <button type="button" class="recompute-all {data.stale ? 'stale' : ''}" aria-expanded={openPanel === 'all'} aria-controls="recompute-all" onclick={() => toggle('all')}><RefreshCw size={12} aria-hidden="true" />Recompute all</button>
         </div>
@@ -144,7 +147,7 @@
                 <span class="block text-[15px] font-medium">{group.feature}</span>
                 {#if group.actor}<span class="block font-mono text-[11px] text-muted-foreground" title="Actor">{group.actor}</span>{/if}
               </span>
-              <span class="dim">{group.workflows.length} {group.workflows.length === 1 ? 'workflow' : 'workflows'}</span>
+              <span class="dim">{group.workflows.filter(reviewed).length}/{group.workflows.length} {group.workflows.length === 1 ? 'workflow' : 'workflows'} reviewed</span>
             </summary>
             {#each group.workflows as workflow, index (workflow.id)}
               <WorkflowRow {workflow} {index} href="{base}/{workflow.id}/1" open={openPanel === workflow.id} ontoggle={() => toggle(workflow.id)}>

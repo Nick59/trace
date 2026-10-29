@@ -4,8 +4,8 @@
   import type { EntrypointKind } from '$lib/types';
 
   type Step = { id: string; title: string };
-  let { source, currentId, steps, base, kind = 'other', zoom = $bindable('fit'), onSelect, markIds = [], onrendered }: {
-    markIds?: string[]; onrendered?: () => void;
+  let { source, currentId, steps, base, kind = 'other', zoom = $bindable('fit'), onSelect, markIds = [], viewedIds = [], onrendered }: {
+    markIds?: string[]; viewedIds?: string[]; onrendered?: () => void;
     zoom?: 'fit' | '1:1'; source: string; kind?: EntrypointKind; currentId: string; steps: Step[]; base: string; onSelect: (stepNumber: number) => void;
   } = $props();
 
@@ -56,6 +56,7 @@
       applyZoom();
       highlight(true);
       markSiblings();
+      markViewed();
       onrendered?.();
     } catch {
       if (token === renderCount) status = 'failed';
@@ -97,7 +98,6 @@
     for (const [node, index] of nodeElements()) {
       node.setAttribute('tabindex', '0');
       node.setAttribute('role', 'link');
-      node.setAttribute('aria-label', `Step ${index + 1}: ${steps[index].title}`);
       node.style.cursor = 'pointer';
       node.addEventListener('click', () => onSelect(index + 1));
       node.addEventListener('keydown', (event) => {
@@ -143,6 +143,35 @@
     for (const [node, index] of nodeElements()) node.classList.toggle('trace-sibling', markIds.includes(steps[index].id));
   }
 
+  const SVG = 'http://www.w3.org/2000/svg';
+  // The badge sits on the top-right corner of the node's shape; g.node is translated to the node centre, so the shape's bbox is centre-relative.
+  function addBadge(node: SVGGElement) {
+    const shape = node.querySelector<SVGGraphicsElement>('rect, polygon, path');
+    if (!shape) return;
+    const box = shape.getBBox();
+    const badge = document.createElementNS(SVG, 'g');
+    badge.setAttribute('class', 'trace-badge');
+    badge.setAttribute('transform', `translate(${box.x + box.width - 2}, ${box.y + 2})`);
+    badge.setAttribute('aria-hidden', 'true');
+    const disc = document.createElementNS(SVG, 'circle');
+    disc.setAttribute('r', '7');
+    const tick = document.createElementNS(SVG, 'path');
+    tick.setAttribute('d', 'M-3.5 0.2 L-1.2 2.6 L3.6 -2.4');
+    badge.append(disc, tick);
+    node.append(badge);
+  }
+
+  function markViewed() {
+    for (const [node, index] of nodeElements()) {
+      const viewed = viewedIds.includes(steps[index].id);
+      node.classList.toggle('trace-viewed', viewed);
+      node.setAttribute('aria-label', `Step ${index + 1}: ${steps[index].title}${viewed ? ' (viewed)' : ''}`);
+      const badge = node.querySelector('.trace-badge');
+      if (viewed && !badge) addBadge(node);
+      else if (!viewed && badge) badge.remove();
+    }
+  }
+
   onMount(() => {
     const onScheme = (event: MediaQueryListEvent) => (dark = event.matches);
     scheme?.addEventListener('change', onScheme);
@@ -167,6 +196,7 @@
   $effect(() => { void zoom; if (status === 'ready') { applyZoom(); highlight(true); } });
   $effect(() => { void currentId; if (status === 'ready') highlight(); });
   $effect(() => { void markIds; if (status === 'ready') markSiblings(); });
+  $effect(() => { void viewedIds; if (status === 'ready') markViewed(); });
 </script>
 
 {#if status === 'failed'}
@@ -218,5 +248,13 @@
   .graph :global(.edgeLabel),
   .graph :global(.edgeLabel p),
   .graph :global(.edgeLabel rect) { background: var(--canvas) !important; fill: var(--canvas) !important; color: var(--muted-fg) !important; font: 11px var(--fm) !important; }
+  .graph :global(g.node.trace-viewed rect),
+  .graph :global(g.node.trace-viewed polygon),
+  .graph :global(g.node.trace-viewed path) { stroke: color-mix(in srgb, var(--a-green) 65%, var(--line)) !important; fill: color-mix(in srgb, var(--canvas) 90%, var(--a-green)) !important; }
+  .graph :global(g.node.trace-viewed.trace-current rect),
+  .graph :global(g.node.trace-viewed.trace-current polygon) { stroke: var(--a-green) !important; }
+  .graph :global(g.node.trace-viewed.trace-upcoming) { opacity: 0.8; }
+  .graph :global(g.node .trace-badge circle) { fill: var(--a-green) !important; stroke: var(--canvas) !important; stroke-width: 1.5px !important; }
+  .graph :global(g.node.trace-viewed .trace-badge path) { fill: none !important; stroke: var(--canvas) !important; stroke-width: 1.8px !important; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: none !important; }
   .graph :global(g.node:focus-visible) { outline: 2px solid var(--ring); outline-offset: 2px; }
 </style>

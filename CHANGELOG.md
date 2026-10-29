@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- Space on a step page marks the step as viewed (green check on the graph, "5/9 viewed" progress, a "Viewed" button) and goes to the next unviewed step; Shift+Space unmarks it. Viewed steps are saved per analysis.
+- When every step of a workflow is viewed, a "Workflow reviewed" overlay counts 5 seconds and opens the next unfinished workflow; Esc or Stay cancels, Enter or Go now skips the wait.
+- The pull request page shows "5/9" or "reviewed" on each workflow, "2/5 workflows reviewed" on each feature and an overall count.
+- `PUT` and `DELETE /api/pr/[owner]/[repo]/[number]/[workflowId]/views` mark and unmark a step as viewed.
 - Workflows are grouped by feature on the pull request page: each feature (an actor and a goal) is a collapsible group with compact rows, one per technical path, and the step page shows the feature above the workflow title.
 - Every workflow needs a `feature` and the number of workflows is no longer limited; a stored analysis is still capped at 5 MB.
 - On desktop the step page panes are resizable and collapsible (workflow graph versus content; the step panel collapses to its title line) with draggable, keyboard-accessible handles, double-click to reset, and sizes remembered in the browser.
@@ -27,6 +31,7 @@
 - The app follows the system light or dark color scheme.
 
 ### Changed
+- Test files are ignored: they are never steps (a submission with a test step is rejected), they do not count toward coverage ("N test files ignored" is shown instead), and test steps in existing analyses are hidden.
 - The top bar is now identical and full-width on every page, and the bottom status bar only appears on pull request and step pages.
 - A workflow is now one technical path through a feature (one request, one outcome) and each step is exactly one file in execution order, so the diff shows a single file; steps allow up to 20 per workflow and submissions can no longer bundle files with `paths` (older analyses still show their file tabs). Recompute the pull request to get the new shape.
 - The database moves to schema version 3 (a nullable `workflows.feature` column) on first start; existing analyses keep working and are grouped under their own workflow titles until recomputed.

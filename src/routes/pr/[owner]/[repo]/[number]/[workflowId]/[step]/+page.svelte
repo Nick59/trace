@@ -1,14 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, ExternalLink, RefreshCw } from '@lucide/svelte';
+  import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, ExternalLink, PartyPopper, RefreshCw } from '@lucide/svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { fly } from 'svelte/transition';
   import { motionMs } from '$lib/kinds';
+  import { Button } from '$lib/components/ui/button';
   import KindBadge from '$lib/components/KindBadge.svelte';
   import ReviewDiff from '$lib/components/ReviewDiff.svelte';
   import { graphNav, type GraphNav, type NavMemory } from '$lib/graph-nav';
   import { navHints } from '$lib/nav-state.svelte';
+  import { nextUnviewedStep, nextWorkflow, progressOf, type WorkflowProgress } from '$lib/viewed';
   import StepNav from '$lib/components/StepNav.svelte';
   import WorkflowGraph from '$lib/components/WorkflowGraph.svelte';
   import { ResizableHandle, ResizablePane, ResizablePaneGroup } from '$lib/components/ui/resizable';
@@ -121,6 +123,94 @@
     event.preventDefault();
     move(direction);
   }
+  // Views are keyed by file path; the set is replaced (never mutated) so reads stay reactive, and is reset from the server on every navigation.
+  let viewed = $derived(new Set(data.viewedPaths));
+  let stepPaths = $derived(data.workflow.steps.map((step) => step.path));
+  let progress = $derived(progressOf(stepPaths, viewed));
+  let viewedIds = $derived(data.workflow.steps.filter((step) => viewed.has(step.path)).map((step) => step.id));
+  let isViewed = $derived(viewed.has(data.step.path));
+  let viewError = $state('');
+
+  async function setViewed(stepPath: string, on: boolean): Promise<boolean> {
+    const workflowId = data.workflow.id;
+    const apply = (value: boolean) => {
+      if (data.workflow.id !== workflowId) return;
+      viewed = value ? new Set([...viewed, stepPath]) : new Set([...viewed].filter((candidate) => candidate !== stepPath));
+    };
+    viewError = '';
+    apply(on);
+    try {
+      const response = await fetch(`/api${data.prPath}/${workflowId}/views`, { method: on ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: stepPath }) });
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${response.status}`);
+      return true;
+    } catch (cause) {
+      apply(!on);
+      viewError = `Could not ${on ? 'mark' : 'unmark'} the step as viewed: ${cause instanceof Error ? cause.message : 'request failed'}`;
+      return false;
+    }
+  }
+
+  const WAIT_MS = 5000;
+  let completion = $state<{ target: WorkflowProgress | null } | null>(null);
+  let waited = $state(0);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+
+  function cancel() {
+    clearTimeout(timeout);
+    clearInterval(ticker);
+    completion = null;
+  }
+  function go() {
+    const target = completion?.target;
+    cancel();
+    if (target?.firstUnviewed) goto(`${data.prPath}/${target.id}/${target.firstUnviewed}`);
+  }
+  function complete() {
+    const order = data.progress.map((entry) => entry.id === data.workflow.id ? { ...entry, ...progress } : entry);
+    const target = nextWorkflow(order, data.workflow.id);
+    cancel();
+    completion = { target };
+    waited = 0;
+    if (!target) return;
+    const started = performance.now();
+    // The timer runs regardless of motion; reduced motion only makes the bar update once a second.
+    ticker = setInterval(() => (waited = Math.min(WAIT_MS, performance.now() - started)), motionMs(100) === 0 ? 1000 : 100);
+    timeout = setTimeout(go, WAIT_MS);
+  }
+  // Navigating to another step or workflow, or leaving the page, cancels a pending jump.
+  $effect(() => { void data.workflow.id; void data.stepNumber; return cancel; });
+
+  async function markAndAdvance() {
+    if (!isViewed && !(await setViewed(data.step.path, true))) return;
+    const next = nextUnviewedStep(stepPaths, viewed, data.stepNumber);
+    if (next === null) complete();
+    else goto(`${base}/${next}`, { reset: false });
+  }
+
+  const IGNORED = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="separator"]';
+  let swallowSpace = false;
+  const consume = (event: Event) => { event.preventDefault(); event.stopPropagation(); };
+  // Captured on the window so Space is ours even when a button, link or graph node has focus.
+  function onviewkey(event: KeyboardEvent) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.target instanceof HTMLElement && event.target.closest(IGNORED)) return;
+    if (completion && event.key === 'Escape') { consume(event); cancel(); return; }
+    if (completion?.target && event.key === 'Enter') { consume(event); go(); return; }
+    if (event.code !== 'Space' && event.key !== ' ') return;
+    consume(event);
+    swallowSpace = true;
+    if (event.repeat) return;
+    if (event.shiftKey) { cancel(); void setViewed(data.step.path, false); return; }
+    if (!completion) void markAndAdvance();
+  }
+  // A focused button clicks on Space keyup, so that event is swallowed too.
+  function onviewkeyup(event: KeyboardEvent) {
+    if (!swallowSpace || (event.code !== 'Space' && event.key !== ' ')) return;
+    swallowSpace = false;
+    consume(event);
+  }
+
   let kind = $derived(data.workflow.entrypoint.kind);
   let num = $derived(String(data.stepNumber).padStart(2, '0'));
 
@@ -131,7 +221,7 @@
 </script>
 
 <svelte:head><title>{data.step.title} · {data.workflow.title} · trace</title></svelte:head>
-<svelte:window {onkeydown} bind:innerWidth={width} />
+<svelte:window {onkeydown} onkeydowncapture={onviewkey} onkeyupcapture={onviewkeyup} bind:innerWidth={width} />
 
 {#snippet graphAside(inPane: boolean)}
   <aside class="pane flex h-full flex-col {inPane ? '' : 'sticky top-0 z-10 border-b lg:static lg:min-h-0 lg:border-r lg:border-b-0'}" data-kind={kind} aria-label="Workflow graph">
@@ -156,8 +246,17 @@
         </button>
       {/if}
     </div>
+    <div class="order-1 shrink-0 px-3 pt-2 pb-1.5" style="border-bottom: 1px solid color-mix(in srgb, var(--a-cyan) 14%, var(--line))">
+      <div class="flex items-center justify-between font-mono text-[11px] text-muted-foreground">
+        <span>{progress.viewed}/{progress.total} viewed</span>
+        {#if progress.viewed === progress.total}<span class="inline-flex items-center gap-1" style="color: var(--a-green)"><Check size={12} aria-hidden="true" />reviewed</span>{/if}
+      </div>
+      <div class="mt-1 h-1 overflow-hidden rounded-full" style="background: color-mix(in srgb, var(--a-green) 14%, var(--line))" role="progressbar" aria-label="Steps viewed" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.viewed}>
+        <div class="h-full rounded-full" style="width: {progress.total ? (progress.viewed / progress.total) * 100 : 0}%; background: var(--a-green); transition: width 0.2s"></div>
+      </div>
+    </div>
     <div id="step-graph" class="order-3 min-h-0 {inPane ? 'flex-1' : `h-[45dvh] lg:order-2 lg:h-auto lg:flex-1 ${graphOpen ? 'block' : 'hidden lg:block'}`}">
-      <WorkflowGraph bind:zoom source={data.mermaid} {kind} currentId={data.step.id} {steps} {base} onSelect={(n) => goto(`${base}/${n}`, { reset: false })} markIds={marked} onrendered={() => graphVersion++} />
+      <WorkflowGraph bind:zoom source={data.mermaid} {kind} currentId={data.step.id} {steps} {base} onSelect={(n) => goto(`${base}/${n}`, { reset: false })} markIds={marked} {viewedIds} onrendered={() => graphVersion++} />
     </div>
     <div class="order-2 shrink-0 border-t px-3 py-2 lg:order-3" style="border-color: color-mix(in srgb, var(--a-cyan) 22%, var(--line))">
       <StepNav {base} stepNumber={data.stepNumber} stepCount={data.stepCount} prev={data.prev} next={data.next} backHref={data.prPath} />
@@ -176,7 +275,11 @@
           <button type="button" class="kbd" aria-label="Collapse step panel" title="Collapse step panel" aria-expanded="true" onclick={() => collapse('stepCollapsed', true)}><ChevronUp size={14} aria-hidden="true" /></button>
         {/if}
         <span class="tab">Step {data.stepNumber}/{data.stepCount}</span><span class="dim grow truncate">{data.step.path}</span>
+        <button type="button" class="viewed-toggle" class:on={isViewed} aria-pressed={isViewed} title={isViewed ? 'Viewed. Click or press Shift+Space to unmark' : 'Mark as viewed and go to the next step'} onclick={() => setViewed(data.step.path, !isViewed)}>
+          <Check size={12} aria-hidden="true" />Viewed<kbd class="kbd" style="height:15px">Space</kbd>
+        </button>
       </div>
+      {#if viewError}<p class="m-0 px-4 pt-2 text-sm text-destructive" role="alert">{viewError}</p>{/if}
       <div class="border-l-[3px] px-4 py-3.5" style="border-left-color: var(--k)">
         <h2 id="step-title" class="flex items-baseline gap-2.5 text-xl leading-tight font-semibold tracking-tight">
           <span class="shrink-0 rounded border px-1.5 py-px font-mono text-[11px] leading-none font-semibold" style="color: var(--a-violet); border-color: color-mix(in srgb, var(--a-violet) 40%, var(--line))" aria-hidden="true">{num}</span>
@@ -189,6 +292,33 @@
       </div>
     </section>
   {/key}
+{/snippet}
+
+{#snippet overlay()}
+  {#if completion}
+    <div class="absolute inset-0 z-20 grid place-items-center p-4 backdrop-blur-sm" style="background: color-mix(in srgb, var(--canvas) 80%, transparent)">
+      <div class="w-full max-w-md rounded-md border p-5 shadow-lg" style="background: var(--canvas); border-color: color-mix(in srgb, var(--a-green) 45%, var(--line))" role="alertdialog" aria-labelledby="done-title" aria-describedby="done-text">
+        <h2 id="done-title" class="flex items-center gap-2 text-lg font-semibold"><PartyPopper size={18} style="color: var(--a-green)" aria-hidden="true" />{completion.target ? 'Workflow reviewed' : 'All workflows reviewed'}</h2>
+        {#if completion.target}
+          <p id="done-text" class="mt-2 text-sm text-muted-foreground">Next: <span class="text-foreground">{completion.target.title}</span>{#if completion.target.feature !== completion.target.title}<span class="block font-mono text-[11px]">{completion.target.feature}</span>{/if}</p>
+          <div class="mt-3 h-1.5 overflow-hidden rounded-full" style="background: color-mix(in srgb, var(--a-green) 14%, var(--line))" role="progressbar" aria-label="Time before the next workflow opens" aria-valuemin={0} aria-valuemax={WAIT_MS} aria-valuenow={waited}>
+            <div class="h-full rounded-full" style="width: {(waited / WAIT_MS) * 100}%; background: var(--a-green)"></div>
+          </div>
+          <p class="mt-1.5 font-mono text-[11px] text-muted-foreground" aria-live="polite">Opening in {Math.max(0, Math.ceil((WAIT_MS - waited) / 1000))}s</p>
+          <div class="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onclick={cancel}>Stay<kbd class="kbd ml-1.5">Esc</kbd></Button>
+            <Button size="sm" onclick={go}>Go now<kbd class="kbd ml-1.5">Enter</kbd></Button>
+          </div>
+        {:else}
+          <p id="done-text" class="mt-2 text-sm text-muted-foreground">Every step of every workflow in this pull request is marked viewed.</p>
+          <div class="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onclick={cancel}>Stay<kbd class="kbd ml-1.5">Esc</kbd></Button>
+            <Button size="sm" href={data.prPath}>Back to the pull request</Button>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet collapsedStep()}
@@ -250,14 +380,16 @@
 {:else}
   <div class="step-root h-full overflow-y-auto lg:grid lg:grid-cols-[minmax(320px,1fr)_2fr] lg:overflow-hidden" bind:this={root}>
     {@render graphAside(false)}
-    <main class="min-w-0 p-3 sm:p-4 lg:min-h-0 lg:overflow-auto" bind:this={content}>
+    <main class="relative min-w-0 p-3 sm:p-4 lg:min-h-0 lg:overflow-auto" bind:this={content}>
+      {@render overlay()}
       <div class="flex flex-col gap-4">{@render stepPanel(false)}{@render diffPanel()}</div>
     </main>
   </div>
 {/if}
 
 {#snippet contentPanes()}
-  <div class="flex h-full flex-col gap-2 p-3">
+  <div class="relative flex h-full flex-col gap-2 p-3">
+    {@render overlay()}
     {#if layout.stepCollapsed}
       {@render collapsedStep()}
     {:else}
@@ -285,6 +417,9 @@
   .file-tab .name { overflow: hidden; text-overflow: ellipsis; }
   .file-tab:hover { color: var(--fg); }
   .file-tab.on { color: var(--fg); border-bottom-color: var(--a-violet); background: var(--canvas); }
+  .viewed-toggle { display: inline-flex; flex: none; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted-fg); font: 500 11px var(--fm); text-transform: none; letter-spacing: 0; transition: all 0.15s; }
+  .viewed-toggle:hover { color: var(--fg); }
+  .viewed-toggle.on { color: var(--a-green); border-color: color-mix(in srgb, var(--a-green) 55%, var(--line)); background: color-mix(in srgb, var(--a-green) 10%, transparent); }
   .zoom-on { color: var(--fg); border-color: var(--a-cyan); }
   .pane { background: color-mix(in srgb, var(--a-cyan) 5%, var(--canvas)); border-color: color-mix(in srgb, var(--a-cyan) 28%, var(--line)); }
 </style>
