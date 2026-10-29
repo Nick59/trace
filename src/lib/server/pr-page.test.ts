@@ -55,7 +55,9 @@ test('PR page reports workflows and flags an analysis made for an older commit',
   submitWorkflows(draft.id, draft.headSha, sampleWorkflows, 'agent');
   const fresh = await loadPrPage('acme', 'widget', '7');
   assert.equal(fresh.stale, false);
-  assert.deepEqual(fresh.workflows.map((workflow) => [workflow.id, workflow.stepCount, workflow.entrypoint.kind]), [['w1', 2, 'http']]);
+  assert.deepEqual(fresh.workflows.map((workflow) => [workflow.id, workflow.stepCount, workflow.entrypoint.kind, workflow.actor]), [['w1', 2, 'http', 'API client']]);
+  assert.deepEqual(fresh.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], unassignedFiles: [] });
+  assert.equal(empty.coverage, null);
   stubHead('ffffffff');
   assert.equal((await loadPrPage('acme', 'widget', '7')).stale, true);
   assert.equal(JSON.stringify(fresh).includes('token'), false);
@@ -68,10 +70,28 @@ test('workflow step data carries the mermaid text, the file and prev/next', () =
   assert.equal(first.file?.path, 'src/api/route.ts');
   assert.equal(first.prev, null);
   assert.equal(first.next, 2);
-  assert.match(first.mermaid, /^flowchart LR/);
+  assert.match(first.mermaid, /^flowchart TB/);
   const last = loadWorkflowStep('acme', 'widget', '7', 'w1', '2');
   assert.deepEqual([last.prev, last.next, last.stepCount], [1, null, 2]);
   for (const [workflow, step] of [['w9', '1'], ['w1', '3'], ['w1', '0'], ['w1', 'x']]) {
     assert.throws(() => loadWorkflowStep('acme', 'widget', '7', workflow, step), (error: { status?: number }) => error.status === 404);
   }
+}));
+
+test('workflow step data lists the primary file first, then the step paths', () => withEnv(async () => {
+  const draft = createDraft(samplePr());
+  const step = sampleWorkflows[0].steps[0];
+  submitWorkflows(draft.id, draft.headSha, [{ ...sampleWorkflows[0], steps: [{ ...step, paths: ['src/core/service.ts'] }] }], 'agent');
+  const data = loadWorkflowStep('acme', 'widget', '7', 'w1', '1');
+  assert.deepEqual(data.files.map((file) => file.path), ['src/api/route.ts', 'src/core/service.ts']);
+  assert.equal(data.file?.path, 'src/api/route.ts');
+}));
+
+test('PR page shows the coverage of an old incomplete analysis', () => withEnv(async () => {
+  stubHead('0123456789abcdef');
+  const draft = createDraft(samplePr());
+  submitWorkflows(draft.id, draft.headSha, [{ ...sampleWorkflows[0], steps: [sampleWorkflows[0].steps[0]] }], 'agent',
+    [{ path: 'src/core/service.ts', reason: 'Generated file.' }]);
+  const data = await loadPrPage('acme', 'widget', '7');
+  assert.deepEqual(data.coverage, { total: 2, covered: 1, unassigned: 1, uncovered: [], unassignedFiles: [{ path: 'src/core/service.ts', reason: 'Generated file.' }] });
 }));

@@ -8,7 +8,7 @@ export function samplePr(overrides: Partial<PullRequestSnapshot> = {}): PullRequ
     ], ...overrides };
 }
 
-export const sampleWorkflows = [{ title: 'GET /widgets', summary: 'Lists widgets.', entrypoint: { kind: 'http', label: 'GET /widgets' }, steps: [
+export const sampleWorkflows = [{ title: 'GET /widgets', actor: 'API client', summary: 'Lists widgets.', entrypoint: { kind: 'http', label: 'GET /widgets' }, steps: [
   { title: 'Route', summary: 'Accepts the request.', path: 'src/api/route.ts', symbols: ['GET'], checks: ['Check the request shape.'] },
-  { title: 'Service', summary: 'Does the work.', path: 'src/core/service.ts', symbols: [], checks: [] }
+  { title: 'Service', summary: 'Does the work.', path: 'src/core/service.ts', symbols: [], checks: ['Returns the widgets in stock.'] }
 ] }];

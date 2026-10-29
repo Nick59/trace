@@ -1,18 +1,25 @@
 <script lang="ts">
   import { ArrowRight, GitBranch, LoaderCircle, RefreshCw } from '@lucide/svelte';
+  import { onMount, tick } from 'svelte';
   import { invalidateAll } from '$app/navigation';
+  import { page } from '$app/state';
   import { Button } from '$lib/components/ui/button';
   import CommandBlock from '$lib/components/CommandBlock.svelte';
+  import RecomputePanel from '$lib/components/RecomputePanel.svelte';
   import WorkflowRow from '$lib/components/WorkflowRow.svelte';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
   let tool = $state<'claude' | 'codex'>('claude');
+  let openPanel = $state<string | null>(null);
   let generating = $state(false);
   let generateError = $state('');
   let reloading = $state(false);
   let base = $derived(`/pr/${data.params.owner}/${data.params.repo}/${data.params.number}`);
   let hasWorkflows = $derived(data.workflows.length > 0);
+  let accounted = $derived(data.coverage ? data.coverage.covered + data.coverage.unassigned : 0);
+  let complete = $derived(data.coverage ? data.coverage.uncovered.length === 0 : false);
+  let showUncovered = $state(false);
 
   async function generate() {
     generating = true;
@@ -31,12 +38,42 @@
     }
   }
 
+  const toggle = (id: string) => (openPanel = openPanel === id ? null : id);
+
+  $effect(() => {
+    const match = /^#recompute-(all|w\d+)$/.exec(page.url.hash);
+    if (!match) return;
+    openPanel = match[1];
+    tick().then(() => document.getElementById(`recompute-${match[1]}`)?.scrollIntoView({
+      block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
+  });
+
+  // Warms the module cache so the step page's dynamic import resolves at once.
+  let warmed = false;
+  function warmGraph() {
+    if (warmed) return;
+    warmed = true;
+    import('mermaid').catch(() => { warmed = false; });
+  }
+  function warmOnRow(event: Event) {
+    if (event.target instanceof Element && event.target.closest('a.row')) warmGraph();
+  }
+  onMount(() => {
+    if (typeof requestIdleCallback === 'function') {
+      const handle = requestIdleCallback(warmGraph, { timeout: 4000 });
+      return () => cancelIdleCallback(handle);
+    }
+    const timer = setTimeout(warmGraph, 1500);
+    return () => clearTimeout(timer);
+  });
+
   async function reload() {
     reloading = true;
     try { await invalidateAll(); } finally { reloading = false; }
   }
 </script>
 
+<svelte:window onpointerover={warmOnRow} onfocusin={warmOnRow} />
 <svelte:head><title>#{data.pr.number} {data.pr.title} · trace</title></svelte:head>
 
 {#snippet agentCommands()}
@@ -65,21 +102,45 @@
 
   {#if data.stale && data.analysis}
     <div class="mt-4 flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-sm" style="border-color: color-mix(in srgb, var(--warning) 45%, var(--line)); background: color-mix(in srgb, var(--warning) 9%, var(--canvas))" role="status">
-      <span>Analyzed at <code class="text-xs">{data.analysis.headSha.slice(0, 7)}</code>. The pull request is now at <code class="text-xs">{data.pr.headSha.slice(0, 7)}</code>.{data.setup.apiConfigured ? '' : ' Re-run the command below.'}</span>
-      {#if data.setup.apiConfigured}<Button variant="outline" onclick={generate} disabled={generating}>{#if generating}<LoaderCircle class="animate-spin" />{:else}<RefreshCw />{/if}Regenerate</Button>{/if}
+      <span>Analyzed at <code class="text-xs">{data.analysis.headSha.slice(0, 7)}</code>. The pull request is now at <code class="text-xs">{data.pr.headSha.slice(0, 7)}</code>.</span>
+      <Button onclick={() => (openPanel = 'all')}><RefreshCw />Recompute all</Button>
     </div>
   {/if}
 
   <section class="mt-5">
     {#if hasWorkflows}
       <div class="panel panel-cyan">
-        <div class="panel-head"><span class="tab">Workflows</span><span class="dim">{data.workflows.length}</span></div>
-        {#each data.workflows as workflow, index (workflow.id)}<WorkflowRow {workflow} {index} href="{base}/{workflow.id}/1" />{/each}
+        <div class="panel-head">
+          <span class="tab">Workflows</span><span class="dim">{data.workflows.length}</span>
+          {#if data.coverage && data.coverage.total > 0}
+            <span class="cov {complete ? 'ok' : 'gap'}" title={complete ? 'Every changed file is in a workflow or listed as unassigned' : 'Some changed files are in no workflow'}>{accounted}/{data.coverage.total} files</span>
+          {/if}
+          <button type="button" class="recompute-all {data.stale ? 'stale' : ''}" aria-expanded={openPanel === 'all'} aria-controls="recompute-all" onclick={() => toggle('all')}><RefreshCw size={12} aria-hidden="true" />Recompute all</button>
+        </div>
+        {#if openPanel === 'all'}
+          <RecomputePanel title="all workflows" endpoint="/api{base}/workflows" apiConfigured={data.setup.apiConfigured} source={data.cliSource} bind:tool ondone={() => (openPanel = null)} />
+        {/if}
+        {#if data.coverage && data.coverage.uncovered.length > 0}
+          <details class="cov-list gap" id="not-covered" open={showUncovered} ontoggle={(event) => (showUncovered = event.currentTarget.open)}>
+            <summary>Not in any workflow <span class="dim">{data.coverage.uncovered.length}</span></summary>
+            <p>These changed files are not part of any scenario, so the walkthrough does not explain them. Use "Recompute all" to analyze the pull request again.</p>
+            <ul>{#each data.coverage.uncovered as file}<li>{file}</li>{/each}</ul>
+            <button type="button" class="recompute-all inline" onclick={() => (openPanel = 'all')}><RefreshCw size={12} aria-hidden="true" />Recompute all</button>
+          </details>
+        {/if}
+        {#if data.coverage && data.coverage.unassignedFiles.length > 0}
+          <details class="cov-list">
+            <summary>Unassigned <span class="dim">{data.coverage.unassignedFiles.length}</span></summary>
+            <p>Files with no runtime behavior in any scenario.</p>
+            <ul>{#each data.coverage.unassignedFiles as entry}<li>{entry.path}<span class="why">{entry.reason}</span></li>{/each}</ul>
+          </details>
+        {/if}
+        {#each data.workflows as workflow, index (workflow.id)}
+          <WorkflowRow {workflow} {index} href="{base}/{workflow.id}/1" open={openPanel === workflow.id} ontoggle={() => toggle(workflow.id)}>
+            <RecomputePanel workflowId={workflow.id} title={workflow.title} endpoint="/api{base}/workflows/{workflow.id}" apiConfigured={data.setup.apiConfigured} source={data.cliSource} bind:tool ondone={() => (openPanel = null)} />
+          </WorkflowRow>
+        {/each}
       </div>
-      {#if generateError}<p class="mt-2 text-sm text-destructive" role="alert">{generateError}</p>{/if}
-      {#if !data.setup.apiConfigured && data.stale}
-        <div class="mt-5">{@render agentCommands()}</div>
-      {/if}
     {:else}
       <h2 class="text-base font-semibold">No workflows yet</h2>
       <p class="mt-1 mb-4 max-w-[70ch] text-sm text-muted-foreground">
@@ -101,6 +162,21 @@
 </main>
 
 <style>
+  .cov { font: 500 11px var(--fm); text-transform: none; letter-spacing: 0; padding: 1px 6px; border-radius: 3px; border: 1px solid; }
+  .cov.ok { color: var(--a-green); border-color: color-mix(in srgb, var(--a-green) 45%, var(--line)); }
+  .cov.gap { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 50%, var(--line)); }
+  .cov-list { border-bottom: 1px solid color-mix(in srgb, var(--a-cyan) 14%, var(--line)); padding: 8px 16px; font-size: 13px; }
+  .cov-list summary { cursor: pointer; font: 500 12px var(--fm); color: var(--muted-fg); }
+  .cov-list.gap summary { color: var(--warning); }
+  .cov-list .dim { margin-left: 6px; }
+  .cov-list p { margin: 8px 0 6px; max-width: 70ch; color: var(--muted-fg); }
+  .cov-list ul { margin: 0 0 8px; padding: 0; list-style: none; font: 12px var(--fm); max-height: 260px; overflow: auto; }
+  .cov-list li { padding: 1px 0; overflow-wrap: anywhere; }
+  .cov-list .why { display: block; padding-left: 12px; color: var(--muted-fg); font-family: inherit; font-size: 11px; }
+  .recompute-all.inline { margin-left: 0; }
+  .recompute-all { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted-fg); font: 500 11px var(--fm); text-transform: none; transition: all 0.15s; }
+  .recompute-all:hover, .recompute-all[aria-expanded="true"] { color: var(--fg); border-color: color-mix(in srgb, var(--a-cyan) 55%, var(--line)); }
+  .recompute-all.stale { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, var(--line)); }
   .tool { height: 26px; padding: 0 10px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--muted-fg); font: 500 12px var(--fm); transition: all 0.15s; }
   .tool:hover { color: var(--fg); border-color: color-mix(in srgb, var(--a-green) 50%, var(--line)); }
   .tool.on { color: var(--a-green); border-color: color-mix(in srgb, var(--a-green) 50%, var(--line)); background: color-mix(in srgb, var(--a-green) 10%, transparent); }

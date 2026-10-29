@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { kindHex } from '$lib/kinds';
+  import { kindHex, motionMs } from '$lib/kinds';
   import type { EntrypointKind } from '$lib/types';
 
   type Step = { id: string; title: string };
-  let { source, currentId, steps, base, kind = 'other', onSelect }: {
-    source: string; kind?: EntrypointKind; currentId: string; steps: Step[]; base: string; onSelect: (stepNumber: number) => void;
+  let { source, currentId, steps, base, kind = 'other', zoom = $bindable('fit'), onSelect, markIds = [], onrendered }: {
+    markIds?: string[]; onrendered?: () => void;
+    zoom?: 'fit' | '1:1'; source: string; kind?: EntrypointKind; currentId: string; steps: Step[]; base: string; onSelect: (stepNumber: number) => void;
   } = $props();
 
   let container = $state<HTMLDivElement>();
@@ -45,17 +46,41 @@
           fontFamily: monoFont
         },
         fontFamily: monoFont,
-        flowchart: { useMaxWidth: false, htmlLabels: true, nodeSpacing: 36, rankSpacing: 48, padding: 10, curve: 'basis' }
+        flowchart: { useMaxWidth: false, htmlLabels: true, nodeSpacing: 12, rankSpacing: 32, padding: 6, curve: 'basis', wrappingWidth: 120 }
       });
       const { svg } = await mermaidModule.render(`trace-graph-${token}`, source);
       if (token !== renderCount) return;
       container.innerHTML = svg;
       bindNodes();
       status = 'ready';
-      highlight();
+      applyZoom();
+      highlight(true);
+      markSiblings();
+      onrendered?.();
     } catch {
       if (token === renderCount) status = 'failed';
     }
+  }
+
+  // Labels are 12px; below 9px on screen they stop being readable, so fit never scales past 0.75.
+  const minScale = 9 / 12;
+  function applyZoom() {
+    const svg = container?.querySelector('svg');
+    const box = svg?.viewBox.baseVal;
+    if (!container || !svg || !box || !box.width) return;
+    const style = getComputedStyle(container);
+    const available = container.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const scale = zoom === '1:1' || available <= 0 ? 1 : Math.min(1, Math.max(available / box.width, minScale));
+    svg.removeAttribute('height');
+    svg.style.maxWidth = 'none';
+    svg.style.width = scale < 1 && scale * box.width <= available + 0.5 ? '100%' : `${Math.round(box.width * scale)}px`;
+    svg.style.height = 'auto';
+  }
+
+  function onWheel(event: WheelEvent) {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    zoom = event.deltaY < 0 ? '1:1' : 'fit';
   }
 
   function nodeElements(): [SVGGElement, number][] {
@@ -81,7 +106,24 @@
     }
   }
 
-  function highlight() {
+  // Scrolls only the graph container; scrollIntoView would also move the page.
+  function reveal(node: SVGGElement, instant: boolean) {
+    if (!container) return;
+    const box = container.getBoundingClientRect();
+    const rect = node.getBoundingClientRect();
+    const top = rect.top - box.top + container.scrollTop;
+    const left = rect.left - box.left + container.scrollLeft;
+    const margin = 24;
+    const visible = rect.top >= box.top + margin && rect.bottom <= box.bottom - margin && rect.left >= box.left && rect.right <= box.right;
+    if (visible) return;
+    container.scrollTo({
+      top: Math.max(0, top - (container.clientHeight - rect.height) / 2),
+      left: Math.max(0, left - (container.clientWidth - rect.width) / 2),
+      behavior: instant || motionMs(1) === 0 ? 'auto' : 'smooth'
+    });
+  }
+
+  function highlight(instant = false) {
     const current = steps.findIndex((step) => step.id === currentId);
     for (const [node, index] of nodeElements()) {
       const active = index === current;
@@ -89,12 +131,16 @@
       node.classList.toggle('trace-visited', index < current);
       node.classList.toggle('trace-upcoming', index > current);
       if (active) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
-      if (active) (node as unknown as Element).scrollIntoView({ inline: 'center', block: 'nearest' });
+      if (active) reveal(node, instant);
     }
     container?.querySelectorAll<SVGPathElement>('path.flowchart-link').forEach((edge) => {
       const to = steps.findIndex((step) => edge.classList.contains(`LE-${step.id}`));
       edge.classList.toggle('trace-edge-future', to > current);
     });
+  }
+
+  function markSiblings() {
+    for (const [node, index] of nodeElements()) node.classList.toggle('trace-sibling', markIds.includes(steps[index].id));
   }
 
   onMount(() => {
@@ -105,22 +151,37 @@
   });
 
   $effect(() => { void source; void dark; draw(); });
+  $effect(() => {
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    let shown = container.clientHeight > 0;
+    let width = container.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (status === 'ready' && container && container.clientWidth !== width) { width = container.clientWidth; applyZoom(); }
+      const now = (container?.clientHeight ?? 0) > 0;
+      if (now && !shown && status === 'ready') highlight(true);
+      shown = now;
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  });
+  $effect(() => { void zoom; if (status === 'ready') { applyZoom(); highlight(true); } });
   $effect(() => { void currentId; if (status === 'ready') highlight(); });
+  $effect(() => { void markIds; if (status === 'ready') markSiblings(); });
 </script>
 
 {#if status === 'failed'}
-  <ol class="m-0 flex list-decimal flex-col gap-0.5 pl-5 font-mono text-[13px]">
+  <ol class="m-0 flex h-full list-decimal flex-col gap-1 overflow-auto p-3 pl-8 font-mono text-[13px]">
     {#each steps as step, index (step.id)}
       <li><a href="{base}/{index + 1}" class="underline-offset-2 hover:underline {step.id === currentId ? 'font-semibold' : ''}" aria-current={step.id === currentId ? 'step' : undefined}>{step.title}</a></li>
     {/each}
   </ol>
 {:else}
   {#if status === 'loading'}<div class="flex h-20 items-center justify-center rounded font-mono text-xs text-muted-foreground">drawing graph…</div>{/if}
-  <div bind:this={container} data-kind={kind} class="graph max-h-32 py-2 overflow-auto sm:max-h-36 lg:max-h-[180px] {status === 'loading' ? 'hidden' : ''}"></div>
+  <div bind:this={container} onwheel={onWheel} data-kind={kind} class="graph h-full min-h-0 overflow-auto p-3 {status === 'loading' ? 'hidden' : ''}"></div>
 {/if}
 
 <style>
-  .graph :global(svg) { margin-inline: auto; overflow: visible; }
+  .graph :global(svg) { display: block; margin-inline: auto; overflow: visible; }
   .graph :global(g.node rect),
   .graph :global(g.node polygon),
   .graph :global(g.node path) {
@@ -145,6 +206,8 @@
     stroke-width: 1.5px !important;
     fill: color-mix(in srgb, var(--canvas) 86%, var(--k)) !important;
   }
+  .graph :global(g.node.trace-sibling rect),
+  .graph :global(g.node.trace-sibling polygon) { stroke: var(--k) !important; stroke-width: 1.5px !important; stroke-dasharray: 4 3 !important; }
   .graph :global(g.node.trace-current) { filter: drop-shadow(0 0 5px var(--k)); animation: breathe 2.4s ease-in-out infinite; }
   .graph :global(g.node.trace-current .nodeLabel) { font-weight: 600; }
   .graph :global(path.flowchart-link) {

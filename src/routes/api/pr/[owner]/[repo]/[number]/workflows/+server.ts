@@ -11,7 +11,8 @@ export const POST: RequestHandler = async ({ params }) => {
   try {
     const snapshot = await loadPullRequest(`https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`);
     const draft = createDraft(snapshot);
-    const analysis = submitWorkflows(draft.id, draft.headSha, await generateWorkflows(snapshot), 'api');
+    const { workflows, unassigned } = await generateWorkflows(snapshot);
+    const analysis = submitWorkflows(draft.id, draft.headSha, workflows, 'api', unassigned);
     return json({ analysisId: analysis.id, workflowCount: analysis.workflows.length }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to generate workflows.';
