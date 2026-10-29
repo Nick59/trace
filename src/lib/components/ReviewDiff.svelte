@@ -24,7 +24,7 @@
 
 {#if lines.length}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scrollable region must be focusable for keyboard scrolling -->
-  <div class="diff overflow-x-auto bg-canvas font-mono text-[12.5px] leading-[1.65] [tab-size:2]" style="background: var(--canvas)" role="region" aria-label="Unified diff for {file?.path}" tabindex="0">
+  <div class="diff overflow-auto lg:max-h-[calc(100dvh-8.5rem)] bg-canvas font-mono text-[12.5px] leading-[1.65] [tab-size:2]" style="background: var(--canvas)" role="region" aria-label="Unified diff for {file?.path}" tabindex="0">
     <div class="w-max min-w-full">
       {#each lines as line}
         <div class="row {line.kind}">
