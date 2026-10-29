@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- The home page has an "Analyzed" tab (`/?tab=analyzed`) listing every analyzed pull request with its features, workflows, coverage and review progress, a text and repository filter, and it works without a GitHub token.
+- Open pull requests that have an analysis show their review progress (for example "3/8", with a check when complete).
 - Space on a step page marks the step as viewed (green check on the graph, "5/9 viewed" progress, a "Viewed" button) and goes to the next unviewed step; Shift+Space unmarks it. Viewed steps are saved per analysis.
 - When every step of a workflow is viewed, a "Workflow reviewed" overlay counts 5 seconds and opens the next unfinished workflow; Esc or Stay cancels, Enter or Go now skips the wait.
 - The pull request page shows "5/9" or "reviewed" on each workflow, "2/5 workflows reviewed" on each feature and an overall count.
@@ -31,6 +33,7 @@
 - The app follows the system light or dark color scheme.
 
 ### Changed
+- The status bar on a step page shows a labelled keyboard shortcut legend (flow, branch, viewed, unmark; Enter and Esc while the completion overlay is open), with labels dropped below 1280px and the legend hidden below 1024px.
 - Test files are ignored: they are never steps (a submission with a test step is rejected), they do not count toward coverage ("N test files ignored" is shown instead), and test steps in existing analyses are hidden.
 - The top bar is now identical and full-width on every page, and the bottom status bar only appears on pull request and step pages.
 - A workflow is now one technical path through a feature (one request, one outcome) and each step is exactly one file in execution order, so the diff shows a single file; steps allow up to 20 per workflow and submissions can no longer bundle files with `paths` (older analyses still show their file tabs). Recompute the pull request to get the new shape.

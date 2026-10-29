@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { cliCommands, loadPrPage, loadWorkflowStep, parsePrParams } from './pr-page';
+import { analysisHistory, cliCommands, loadPrPage, loadWorkflowStep, parsePrParams } from './pr-page';
 import { closeStore, createDraft, markViewed, submitWorkflows } from './store';
 import { samplePr, sampleWorkflows } from './test-fixtures';
 
@@ -145,4 +145,47 @@ test('viewed steps show up as counts on the PR page and as sets and PR-ordered p
   const step = loadWorkflowStep('acme', 'widget', '7', 'w1', '1');
   assert.deepEqual(step.viewedPaths, ['src/api/route.ts']);
   assert.deepEqual(step.progress.map((entry) => [entry.id, entry.total, entry.viewed, entry.firstUnviewed]), [['w1', 2, 1, 2], ['w3', 2, 2, null], ['w2', 2, 0, 1]]);
+}));
+
+test('history has one entry per PR from the newest ready analysis, falls back to a draft and counts progress', () => withEnv(async () => {
+  assert.deepEqual(analysisHistory(), []);
+  const old = createDraft(samplePr());
+  submitWorkflows(old.id, old.headSha, [sampleWorkflows[0]], 'agent');
+  const newest = createDraft(samplePr({ title: 'Track request flow v2' }));
+  submitWorkflows(newest.id, newest.headSha, [sampleWorkflows[0], { ...sampleWorkflows[0], feature: 'Other', title: 'B' }], 'api');
+  markViewed(newest.id, 'w1', 'src/api/route.ts');
+  markViewed(newest.id, 'w1', 'src/core/service.ts');
+  markViewed(newest.id, 'w2', 'src/api/route.ts');
+  createDraft(samplePr({ number: 8, repository: 'acme/widget', title: 'Only a draft', url: 'https://github.com/acme/widget/pull/8' }));
+  createDraft(samplePr({ title: 'Newer draft for 7' }));
+
+  const db = new DatabaseSync(path.join(process.env.TRACE_DATA_DIR!, 'trace.db'));
+  db.prepare("UPDATE analyses SET updated_at = '2099-01-01T00:00:00.000Z' WHERE number = 8").run();
+  db.close();
+  const [draftOnly, ready, ...rest] = analysisHistory();
+  assert.equal(rest.length, 0);
+  assert.deepEqual([draftOnly.number, draftOnly.status, draftOnly.source, draftOnly.coverage, draftOnly.features, draftOnly.workflows, draftOnly.analyses], [8, 'draft', null, null, 0, 0, 1]);
+  assert.deepEqual([ready.title, ready.repository, ready.number, ready.author, ready.headSha, ready.status, ready.source, ready.analyses], ['Track request flow v2', 'acme/widget', 7, 'dev', '0123456', 'ready', 'api', 3]);
+  assert.deepEqual([ready.features, ready.workflows], [2, 2]);
+  assert.deepEqual(ready.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], ignoredTests: 0 });
+  assert.deepEqual(ready.review, { workflows: 2, workflowsViewed: 1, steps: 4, stepsViewed: 3 });
+}));
+
+test('history counts hide test steps like the PR page', () => withEnv(async () => {
+  const testFile = { path: 'tests/route.test.ts', status: 'added', additions: 1, deletions: 0, patch: '' };
+  const base = samplePr();
+  const draft = createDraft({ ...base, files: [...base.files, testFile] });
+  submitWorkflows(draft.id, draft.headSha, [sampleWorkflows[0]], 'agent', [{ path: testFile.path, reason: 'tests' }]);
+  const db = new DatabaseSync(path.join(process.env.TRACE_DATA_DIR!, 'trace.db'));
+  const steps = [...sampleWorkflows[0].steps, { title: 'Verified', summary: 'Tests.', path: testFile.path, symbols: [], checks: ['ok'] }].map((step, index) => ({ id: `s${index + 1}`, paths: [], ...step }));
+  db.prepare('UPDATE workflows SET steps_json = ?, edges_json = ? WHERE analysis_id = ?').run(JSON.stringify(steps), JSON.stringify([{ from: 's1', to: 's2' }, { from: 's2', to: 's3' }]), draft.id);
+  db.prepare('INSERT INTO workflows SELECT analysis_id, ?, 2, title, ?, actor, entrypoint_kind, entrypoint_label, summary, ?, ? FROM workflows WHERE id = ?')
+    .run('w2', 'Tests only', JSON.stringify([steps[2]]), '[]', 'w1');
+  db.close();
+  markViewed(draft.id, 'w1', 'src/api/route.ts');
+  markViewed(draft.id, 'w1', 'src/core/service.ts');
+  const [entry] = analysisHistory();
+  assert.deepEqual([entry.features, entry.workflows], [1, 1]);
+  assert.deepEqual(entry.review, { workflows: 1, workflowsViewed: 1, steps: 2, stepsViewed: 2 });
+  assert.deepEqual(entry.coverage, { total: 2, covered: 2, unassigned: 0, uncovered: [], ignoredTests: 1 });
 }));

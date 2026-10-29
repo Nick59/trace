@@ -62,7 +62,20 @@
         <span class="hidden sm:inline">{pr.headSha.slice(0, 7)}</span>
       {/if}
       <span class="flex-1"></span>
-      {#if stepNumber && stepCount}<span class="hidden items-center gap-1 sm:inline-flex" title="Space marks the step viewed and goes to the next unviewed one, Shift+Space unmarks"><kbd class="kbd" style="height:15px">Space</kbd>viewed</span><span>step {stepNumber}/{stepCount}</span><span class="hidden items-center gap-1 sm:inline-flex" title="↑ ↓ follow the flow, ← → switch branch">{#each [['↑', 'up'], ['↓', 'down'], ['←', 'left'], ['→', 'right']] as const as [key, dir]}<kbd class="kbd" style="height:15px;min-width:15px;opacity:{navHints[dir] ? 1 : 0.35}">{key}</kbd>{/each}</span>{/if}
+      {#if stepNumber && stepCount}
+        <span class="hidden items-center gap-3 text-muted-foreground lg:inline-flex" aria-label="Keyboard shortcuts">
+          {#if navHints.overlay}
+            {#if navHints.canGo}<span class="inline-flex items-center gap-1"><kbd class="kbd" style="height:15px">Enter</kbd><span class="hidden xl:inline">go now</span></span>{/if}
+            <span class="inline-flex items-center gap-1"><kbd class="kbd" style="height:15px">Esc</kbd><span class="hidden xl:inline">stay</span></span>
+          {:else}
+            <span class="inline-flex items-center gap-1">{#each [['↑', 'up'], ['↓', 'down']] as const as [key, dir]}<kbd class="kbd" style="height:15px;min-width:15px;opacity:{navHints[dir] ? 1 : 0.35}">{key}</kbd>{/each}<span class="hidden xl:inline">flow</span></span>
+            <span class="inline-flex items-center gap-1">{#each [['←', 'left'], ['→', 'right']] as const as [key, dir]}<kbd class="kbd" style="height:15px;min-width:15px;opacity:{navHints[dir] ? 1 : 0.35}">{key}</kbd>{/each}<span class="hidden xl:inline">branch</span></span>
+            <span class="inline-flex items-center gap-1"><kbd class="kbd" style="height:15px">Space</kbd><span class="hidden xl:inline">viewed</span></span>
+            <span class="inline-flex items-center gap-1"><kbd class="kbd" style="height:15px">⇧ Space</kbd><span class="hidden xl:inline">unmark</span></span>
+          {/if}
+        </span>
+        <span>step {stepNumber}/{stepCount}</span>
+      {/if}
     </div>
   </footer>
   {/if}

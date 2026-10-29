@@ -3,7 +3,7 @@
   import Badge from './Badge.svelte';
 
   type Pull = { title: string; repository: string; number: number; author: string; updatedAt: string; draft: boolean };
-  let { pull, index = 0, stagger = true, isNew = false }: { pull: Pull; index?: number; stagger?: boolean; isNew?: boolean } = $props();
+  let { pull, index = 0, stagger = true, isNew = false, review }: { pull: Pull; index?: number; stagger?: boolean; isNew?: boolean; review?: { workflowsViewed: number; workflows: number } } = $props();
 
   const units: [Intl.RelativeTimeFormatUnit, number][] = [['day', 86_400_000], ['hour', 3_600_000], ['minute', 60_000]];
   function relative(iso: string): string {
@@ -29,6 +29,7 @@
       <span class="min-w-0 truncate text-[14.5px] font-medium">{pull.title}</span>
       {#if pull.draft}<Badge>draft</Badge>{/if}
       {#if isNew}<span class="new-badge">new</span>{/if}
+      {#if review}<span class="review" class:done={review.workflowsViewed === review.workflows} title="Workflows reviewed in the analysis">{review.workflowsViewed}/{review.workflows}{review.workflowsViewed === review.workflows ? ' ✓' : ''}</span>{/if}
     </span>
     <span class="mt-0.5 flex flex-wrap items-center gap-x-3 font-mono text-xs text-muted-foreground">
       <span class="truncate"><span class="opacity-70">{owner}/</span>{name}</span>
@@ -49,6 +50,8 @@
   .row:hover, .row:focus-visible { background: color-mix(in srgb, var(--a-cyan) 7%, transparent); }
   .row:hover::before, .row:focus-visible::before { opacity: 1; }
   .row.fresh { background: color-mix(in srgb, var(--a-cyan) 10%, transparent); animation: tint 4.5s ease-out both; }
+  .review { flex: none; padding: 0 6px; border-radius: 4px; font: 500 10.5px var(--fm); color: var(--muted-fg); border: 1px solid var(--line); }
+  .review.done { color: var(--a-green); border-color: color-mix(in srgb, var(--a-green) 45%, var(--line)); }
   .new-badge { flex: none; padding: 0 6px; border-radius: 4px; font: 600 10px var(--fm); text-transform: uppercase; color: var(--a-cyan); border: 1px solid color-mix(in srgb, var(--a-cyan) 50%, transparent); animation: fade 4.5s ease-in both; }
   @keyframes tint { 0%, 70% { background-color: color-mix(in srgb, var(--a-cyan) 10%, transparent); } 100% { background-color: transparent; } }
   @keyframes fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }

@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import path from 'node:path';
 import type { AnalysisSource, AnalysisStatus, EntrypointKind, PullRequestSummary, ReviewFile, UnassignedFile, Workflow, WorkflowStep } from '../types';
 import { getPullRequestSummary } from './github';
-import { latestAnalysisForPr, viewsFor } from './store';
+import { latestAnalysisForPr, listAnalyses, viewsFor } from './store';
 import { buildCliCommands, type CliCommands } from '../cli-commands';
 import { isTestFile } from '../test-files';
 import { progressOf, type WorkflowProgress } from '../viewed';
@@ -14,6 +14,13 @@ export interface WorkflowSummary { id: string; position: number; title: string; 
 export interface FeatureGroup { feature: string; actor?: string; workflows: WorkflowSummary[] }
 
 export interface PrCoverage extends Coverage { unassignedFiles: UnassignedFile[] }
+
+export interface HistoryEntry {
+  title: string; repository: string; number: number; url: string; author: string; headSha: string;
+  status: AnalysisStatus; source: AnalysisSource | null; updatedAt: string;
+  features: number; workflows: number; coverage: Coverage | null; analyses: number;
+  review: { workflowsViewed: number; workflows: number; stepsViewed: number; steps: number };
+}
 
 export interface PrPageData {
   params: PrParams;
@@ -86,6 +93,34 @@ function groupByFeature(workflows: Workflow[], views: Map<string, Set<string>>):
     else groups.set(feature, { feature, ...(workflow.actor ? { actor: workflow.actor } : {}), workflows: [summary] });
   }
   return [...groups.values()];
+}
+
+const prKey = (repository: string, number: number) => `${repository.toLowerCase()}#${number}`;
+
+/** One entry per pull request, taken from the same analysis the PR page shows, newest first. */
+export function analysisHistory(): HistoryEntry[] {
+  const counts = new Map<string, number>();
+  const firsts = new Map<string, { repository: string; number: number }>();
+  for (const summary of listAnalyses()) {
+    const key = prKey(summary.repository, summary.number);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!firsts.has(key)) firsts.set(key, summary);
+  }
+  const entries: HistoryEntry[] = [];
+  for (const [key, { repository, number }] of firsts) {
+    try {
+      const analysis = latestAnalysisForPr(repository, number);
+      if (!analysis) continue;
+      const groups = groupByFeature(visibleWorkflows(analysis.workflows), viewsFor(analysis.id));
+      const workflows = groups.flatMap((group) => group.workflows);
+      entries.push({ title: analysis.pr.title, repository: analysis.repository, number: analysis.number, url: analysis.pr.url, author: analysis.pr.author,
+        headSha: analysis.headSha.slice(0, 7), status: analysis.status, source: analysis.source, updatedAt: analysis.updatedAt,
+        features: groups.length, workflows: workflows.length, coverage: analysis.status === 'ready' ? coverage(analysis) : null, analyses: counts.get(key) ?? 1,
+        review: { workflows: workflows.length, workflowsViewed: workflows.filter((workflow) => workflow.stepCount > 0 && workflow.viewed === workflow.stepCount).length,
+          stepsViewed: workflows.reduce((sum, workflow) => sum + workflow.viewed, 0), steps: workflows.reduce((sum, workflow) => sum + workflow.stepCount, 0) } });
+    } catch { /* A corrupt analysis must not hide the others. */ }
+  }
+  return entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function loadPrPage(owner: string, repo: string, number: string | number): Promise<PrPageData> {

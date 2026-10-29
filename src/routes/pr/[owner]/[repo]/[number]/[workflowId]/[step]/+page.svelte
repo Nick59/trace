@@ -100,7 +100,8 @@
     nav = graphNav(data.workflow.steps, data.workflow.edges, data.step.id, memory(), renderedX);
   });
   $effect(() => { Object.assign(navHints, { up: nav.up !== null, down: nav.down !== null, left: nav.left !== null, right: nav.right !== null }); });
-  $effect(() => () => Object.assign(navHints, { up: false, down: false, left: false, right: false }));
+  $effect(() => { navHints.overlay = completion !== null; navHints.canGo = Boolean(completion?.target); });
+  $effect(() => () => Object.assign(navHints, { up: false, down: false, left: false, right: false, overlay: false, canGo: false }));
   let marked = $derived([nav.left, nav.right].filter((id): id is string => id !== null));
 
   function move(direction: keyof GraphNav) {

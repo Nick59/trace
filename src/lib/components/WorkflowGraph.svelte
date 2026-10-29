@@ -144,14 +144,19 @@
   }
 
   const SVG = 'http://www.w3.org/2000/svg';
-  // The badge sits on the top-right corner of the node's shape; g.node is translated to the node centre, so the shape's bbox is centre-relative.
+  // g.node is translated to the node centre, so the shape's bbox is centre-relative. While the container is display:none (first render, collapsed pane) getBBox returns zeros, so the badge stays hidden until a later pass can measure it.
+  function placeBadge(node: SVGGElement, badge: SVGGElement) {
+    const shape = node.querySelector<SVGGraphicsElement>('.label-container') ?? node.querySelector<SVGGraphicsElement>('rect, polygon, path');
+    const box = shape?.getBBox();
+    const measured = !!box && box.width > 0 && box.height > 0;
+    if (measured) badge.setAttribute('transform', `translate(${box.x + box.width - 2}, ${box.y + 2})`);
+    badge.setAttribute('visibility', measured ? 'visible' : 'hidden');
+    return measured;
+  }
+
   function addBadge(node: SVGGElement) {
-    const shape = node.querySelector<SVGGraphicsElement>('rect, polygon, path');
-    if (!shape) return;
-    const box = shape.getBBox();
     const badge = document.createElementNS(SVG, 'g');
     badge.setAttribute('class', 'trace-badge');
-    badge.setAttribute('transform', `translate(${box.x + box.width - 2}, ${box.y + 2})`);
     badge.setAttribute('aria-hidden', 'true');
     const disc = document.createElementNS(SVG, 'circle');
     disc.setAttribute('r', '7');
@@ -159,24 +164,31 @@
     tick.setAttribute('d', 'M-3.5 0.2 L-1.2 2.6 L3.6 -2.4');
     badge.append(disc, tick);
     node.append(badge);
+    return badge;
   }
 
+  let badgeFrame = 0;
   function markViewed() {
+    let unmeasured = false;
     for (const [node, index] of nodeElements()) {
       const viewed = viewedIds.includes(steps[index].id);
       node.classList.toggle('trace-viewed', viewed);
       node.setAttribute('aria-label', `Step ${index + 1}: ${steps[index].title}${viewed ? ' (viewed)' : ''}`);
-      const badge = node.querySelector('.trace-badge');
-      if (viewed && !badge) addBadge(node);
-      else if (!viewed && badge) badge.remove();
+      const badge = node.querySelector<SVGGElement>('.trace-badge');
+      if (viewed) {
+        if (!placeBadge(node, badge ?? addBadge(node))) unmeasured = true;
+      } else badge?.remove();
     }
+    cancelAnimationFrame(badgeFrame);
+    // A hidden container is retried by the ResizeObserver when it is shown; polling frames would never succeed.
+    if (unmeasured && (container?.clientHeight ?? 0) > 0) badgeFrame = requestAnimationFrame(() => { if (status === 'ready') markViewed(); });
   }
 
   onMount(() => {
     const onScheme = (event: MediaQueryListEvent) => (dark = event.matches);
     scheme?.addEventListener('change', onScheme);
     import('mermaid').then((module) => { mermaidModule = module.default; draw(); }).catch(() => (status = 'failed'));
-    return () => { renderCount++; scheme?.removeEventListener('change', onScheme); };
+    return () => { renderCount++; cancelAnimationFrame(badgeFrame); scheme?.removeEventListener('change', onScheme); };
   });
 
   $effect(() => { void source; void dark; draw(); });
@@ -187,7 +199,7 @@
     const observer = new ResizeObserver(() => {
       if (status === 'ready' && container && container.clientWidth !== width) { width = container.clientWidth; applyZoom(); }
       const now = (container?.clientHeight ?? 0) > 0;
-      if (now && !shown && status === 'ready') highlight(true);
+      if (now && !shown && status === 'ready') { highlight(true); markViewed(); }
       shown = now;
     });
     observer.observe(container);
