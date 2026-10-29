@@ -90,6 +90,9 @@
     <div class="flex flex-col gap-2">
       <p class="m-0 text-sm text-muted-foreground">First time? Register the MCP server once:</p>
       <CommandBlock command={data.cliCommands.register[tool]} label="{tool} register command" />
+      <p class="m-0 text-sm text-muted-foreground">Then install the {tool === 'claude' ? '/trace' : '$trace'} skill:</p>
+      <CommandBlock command={data.cliCommands.installSkill[tool]} label="install skill command" />
+      <p class="m-0 text-xs text-muted-foreground">Run it inside a clone of {data.pr.repository} to reuse it; otherwise the skill clones it.</p>
     </div>
   </div>
 {/snippet}

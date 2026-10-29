@@ -9,20 +9,60 @@ Run the CLI on the same machine and checkout as Trace (SSH into nick-gdev if you
 Codex:
 
 ```sh
-codex mcp add trace -- node /home/nick/binariesworld/pr-reviewer/scripts/mcp-launch.mjs
+codex mcp add trace -- node /home/nick/binariesworld/trace/scripts/mcp-launch.mjs
 codex mcp list
 ```
 
 Claude Code:
 
 ```sh
-claude mcp add trace -- node /home/nick/binariesworld/pr-reviewer/scripts/mcp-launch.mjs
+claude mcp add --scope user trace -- node /home/nick/binariesworld/trace/scripts/mcp-launch.mjs
 claude mcp list
 ```
 
 Replace the absolute launcher path if your checkout is elsewhere. The launcher works regardless of your CLI working directory: it loads Trace's `.env` and uses the checkout's storage. Restart the MCP server/CLI after changing `.env`. Register using `node` directly; npm's startup banner can corrupt stdio protocol traffic.
 
 Official client references: [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp), [Claude Code MCP](https://code.claude.com/docs/en/mcp).
+
+## Claude Code skill
+
+Claude Code can run the analysis as a skill, `/trace`, which reads the whole PR instead of the bounded snapshot. Register the MCP server (above), then install the skill once; the symlink keeps it in sync with this checkout:
+
+```sh
+mkdir -p ~/.claude/skills && ln -sfn /home/nick/binariesworld/trace/skills/trace ~/.claude/skills/trace
+```
+
+Run it in Claude Code:
+
+```
+/trace
+/trace w3 "include the DB write in UserRepository"
+/trace https://github.com/OWNER/REPO/pull/NUMBER
+/trace https://github.com/OWNER/REPO/pull/NUMBER w3 "include the DB write in UserRepository"
+```
+
+Without a URL, the skill uses the pull request of the current branch (via `gh pr view`; it asks for the URL when there is none). It always analyzes the PR head commit in a separate worktree, not your local branch state. With a URL, the first form analyzes the whole PR. The second recomputes workflow `w3` of the latest ready analysis; the instruction is a hint, not a command. The skill uses the current directory when it is a clone of the repository (its `origin` points at OWNER/REPO); otherwise it makes a blobless clone in a temporary directory. Either way it fetches the PR head and checks it out in a separate git worktree, so your checkout, branch and uncommitted changes are never touched, and it removes the worktree when it is done. It does not edit files, commit, push or post to GitHub. If the PR changed since the analysis being recomputed, run a full `/trace <url>`.
+
+Set `TRACE_APP_URL` (for example `http://localhost:5173`) in this project's `.env` and restart the MCP server: the skill then ends with a link to the PR in Trace.
+
+## Codex skill
+
+Codex can run the same analysis as a skill, `$trace`. Register the MCP server (above), then install the skill once; the symlink keeps it in sync with this checkout:
+
+```sh
+mkdir -p ~/.codex/skills && ln -sfn /home/nick/binariesworld/trace/skills/codex/trace ~/.codex/skills/trace
+```
+
+Mention it in your Codex prompt (Codex has no argument substitution, so everything after `$trace` is read as the arguments):
+
+```
+$trace
+$trace w3 "include the DB write in UserRepository"
+$trace https://github.com/OWNER/REPO/pull/NUMBER
+$trace https://github.com/OWNER/REPO/pull/NUMBER w3 "include the DB write in UserRepository"
+```
+
+It behaves like the Claude Code skill: same worktree flow, same recompute rules, and it explores with shell commands (`rg`, `sed -n`, `git -C <worktree> diff`) instead of Claude's file tools. It does not edit files, commit, push or post to GitHub.
 
 ## Generate and open workflows
 
@@ -52,6 +92,7 @@ A **step** is exactly one file, in the order the request executes it: route regi
 - `summary` (one sentence, at most 200 characters): what this file does in this flow and what the PR changed in it.
 - `checks` (1 to 4, at most 140 characters each): what this file's code should do here, phrased as the expected outcome and not as review homework (good: "Refuses a collar already linked to another dog with 409"; bad: "Verify the error handling").
 - `symbols` (at most 8, 100 characters each): the functions or classes of this file that take part in the flow.
+- `ranges` (optional, at most 8): the line ranges { `from`, `to` } of the new file, at the head commit, that this workflow's path goes through, covering the changed lines it uses. A file shared by several workflows should get different ranges per workflow, so that the reviewer sees only the changes that belong to the path. Line numbers are those of the head version, the `+` side of the diff hunk headers (`@@ -a,b +c,d @@`). Each range must overlap a changed block of the file, otherwise the submission is rejected. Leave `ranges` out when the whole file belongs to the path.
 
 Test files (a `test/`, `tests/`, `__tests__/`, `spec/`, `specs/` or `e2e/` directory, or names such as `*.test.*`, `*.spec.*`, `*_test.go`, `test_*.py`, `*_spec.rb`) are never steps and never need coverage: a submission with a test file as a step is rejected, and Trace ignores test files in its coverage check, so leave them out of `unassigned` too.
 
@@ -69,7 +110,7 @@ Name only symbols supported by the code, and state uncertainty in the summary wh
 
 ### Output shape
 
-A workflow object has: `feature` (at most 120 characters), `title` (at most 120), `actor` (at most 60), `summary` (at most 600), `entrypoint` ({ `kind`: "http" | "cli" | "job" | "event" | "ui" | "other", `label`: at most 120 characters }), `steps` and optional `edges`. A step has `title` (at most 120), `summary` (one sentence, at most 200), `path` (one exact changed file path), `symbols` (at most 8, 100 characters each) and `checks` (1 to 4, 140 characters each, expected outcomes). Send 20 steps per workflow at most; the number of workflows is unlimited, but the whole analysis must stay under 5 MB. Every `path` must be an exact changed file path.
+A workflow object has: `feature` (at most 120 characters), `title` (at most 120), `actor` (at most 60), `summary` (at most 600), `entrypoint` ({ `kind`: "http" | "cli" | "job" | "event" | "ui" | "other", `label`: at most 120 characters }), `steps` and optional `edges`. A step has `title` (at most 120), `summary` (one sentence, at most 200), `path` (one exact changed file path), `symbols` (at most 8, 100 characters each) `checks` (1 to 4, 140 characters each, expected outcomes) and optional `ranges` (at most 8 { `from`, `to` } line ranges of the head version). Send 20 steps per workflow at most; the number of workflows is unlimited, but the whole analysis must stay under 5 MB. Every `path` must be an exact changed file path.
 
 Edges are optional (a linear chain by default). When given, each edge is { `from`, `to`, `label`? } with 1-based step numbers within the workflow, at most 40 per workflow, labels of at most 60 characters. The Prev and Next buttons follow step order, and the down key takes the lowest-numbered branch at a fork, so list the success path first. Never send Mermaid or any diagram text: Trace draws the graph.
 
@@ -77,7 +118,7 @@ The top-level `unassigned` list holds { `path`, `reason` } entries, at most 300.
 
 ### Worked example
 
-An invented library app. The PR lets a member renew a loan and changes nine files: src/routes/loans.ts, src/controllers/renew-loan.ts, src/schemas/renew-loan.schema.ts, src/usecases/renew-loan.ts, src/models/loan.ts, src/repositories/loan-repository.ts, src/http/error-mapper.ts, package-lock.json, plus a test file, tests/renew-loan.test.ts, which is ignored. There is one feature, "A member renews a borrowed book", with two technical paths and so two workflows: the renewal succeeds, or it is refused because the book is reserved. Each workflow walks its own files one step per file, in execution order. The route, the controller and the use case appear in both because both requests go through them. The test file is not a step anywhere. The lockfile is the only `unassigned` entry.
+An invented library app. The PR lets a member renew a loan and changes nine files: src/routes/loans.ts, src/controllers/renew-loan.ts, src/schemas/renew-loan.schema.ts, src/usecases/renew-loan.ts, src/models/loan.ts, src/repositories/loan-repository.ts, src/http/error-mapper.ts, package-lock.json, plus a test file, tests/renew-loan.test.ts, which is ignored. There is one feature, "A member renews a borrowed book", with two technical paths and so two workflows: the renewal succeeds, or it is refused because the book is reserved. Each workflow walks its own files one step per file, in execution order, and gives each step the line ranges it uses: the shared use case gets lines 12-34 in the first workflow and lines 8-11 in the second. The route, the controller and the use case appear in both because both requests go through them. The test file is not a step anywhere. The lockfile is the only `unassigned` entry.
 
 ```json
 {
@@ -101,6 +142,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           ],
           "checks": [
             "Exposes POST /loans/:id/renew to signed-in members only"
+          ],
+          "ranges": [
+            {
+              "from": 14,
+              "to": 18
+            }
           ]
         },
         {
@@ -113,6 +160,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "checks": [
             "Answers 200 with the new due date",
             "Rejects a loan that belongs to another member with 403"
+          ],
+          "ranges": [
+            {
+              "from": 1,
+              "to": 40
+            }
           ]
         },
         {
@@ -125,6 +178,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "checks": [
             "Accepts only a numeric loan id",
             "Answers 400 for anything else"
+          ],
+          "ranges": [
+            {
+              "from": 1,
+              "to": 12
+            }
           ]
         },
         {
@@ -138,6 +197,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
             "Refuses a closed loan",
             "Refuses a loan that reached the renewal limit",
             "Extends the due date by 14 days"
+          ],
+          "ranges": [
+            {
+              "from": 12,
+              "to": 34
+            }
           ]
         },
         {
@@ -150,6 +215,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "checks": [
             "Adds 14 days to the due date",
             "Increments the renewal count by one"
+          ],
+          "ranges": [
+            {
+              "from": 20,
+              "to": 28
+            }
           ]
         },
         {
@@ -161,6 +232,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           ],
           "checks": [
             "Saves the due date and the count in the same write"
+          ],
+          "ranges": [
+            {
+              "from": 41,
+              "to": 57
+            }
           ]
         }
       ]
@@ -184,6 +261,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           ],
           "checks": [
             "Exposes POST /loans/:id/renew to signed-in members only"
+          ],
+          "ranges": [
+            {
+              "from": 14,
+              "to": 18
+            }
           ]
         },
         {
@@ -195,6 +278,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           ],
           "checks": [
             "Hands a refusal to the error mapper instead of answering 200"
+          ],
+          "ranges": [
+            {
+              "from": 31,
+              "to": 40
+            }
           ]
         },
         {
@@ -208,6 +297,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           "checks": [
             "Throws ReservedBookError when another member reserved the book",
             "Leaves the loan unchanged"
+          ],
+          "ranges": [
+            {
+              "from": 8,
+              "to": 11
+            }
           ]
         },
         {
@@ -219,6 +314,12 @@ An invented library app. The PR lets a member renew a loan and changes nine file
           ],
           "checks": [
             "Answers 409 with the reason \"book reserved\""
+          ],
+          "ranges": [
+            {
+              "from": 5,
+              "to": 19
+            }
           ]
         }
       ],

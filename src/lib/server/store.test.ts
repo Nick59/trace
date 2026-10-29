@@ -256,3 +256,16 @@ test('submit and replace reject a test file as a step with a clear message', () 
   submitWorkflows(draft.id, draft.headSha, sampleWorkflows, 'agent');
   assert.throws(() => replaceWorkflow(draft.id, 'w1', draft.headSha, withTest, 'agent'), /is a test file/);
 }));
+
+test('a submission with ranges round-trips and a range outside every hunk is refused', () => withStore(() => {
+  const pr = samplePr();
+  pr.files[0].patch = '@@ -1,2 +1,3 @@\n a\n+b\n c';
+  const draft = createDraft(pr);
+  const ranged = (from: number, to: number) => [{ ...sampleWorkflows[0], steps: [{ ...sampleWorkflows[0].steps[0], ranges: [{ from, to }] }, sampleWorkflows[0].steps[1]] }];
+  assert.throws(() => submitWorkflows(draft.id, draft.headSha, ranged(50, 60), 'agent'), /Step 1 \(src\/api\/route\.ts\) has range 50-60/);
+  submitWorkflows(draft.id, draft.headSha, ranged(2, 2), 'agent');
+  assert.deepEqual(getAnalysis(draft.id)!.workflows[0].steps.map((step) => step.ranges), [[{ from: 2, to: 2 }], []]);
+  assert.throws(() => replaceWorkflow(draft.id, 'w1', draft.headSha, ranged(50, 60)[0], 'agent'), /has range 50-60/);
+  replaceWorkflow(draft.id, 'w1', draft.headSha, ranged(1, 3)[0], 'agent');
+  assert.deepEqual(getAnalysis(draft.id)!.workflows[0].steps[0].ranges, [{ from: 1, to: 3 }]);
+}));

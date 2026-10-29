@@ -2,7 +2,8 @@ export interface ReviewFile { path:string; status:string; additions:number; dele
 export interface PullRequestSummary { title:string; url:string; repository:string; number:number; author:string; base:string; head:string; headSha:string }
 export interface PullRequestSnapshot extends PullRequestSummary { description:string; files:ReviewFile[]; warnings:string[] }
 export type EntrypointKind = 'http'|'cli'|'job'|'event'|'ui'|'other';
-export interface WorkflowStep { id:string; title:string; summary:string; path:string; paths:string[]; symbols:string[]; checks:string[] }
+export interface StepRange { from:number; to:number }
+export interface WorkflowStep { id:string; title:string; summary:string; path:string; paths:string[]; symbols:string[]; checks:string[]; ranges?:StepRange[] }
 export interface WorkflowEdge { from:string; to:string; label?:string }
 export interface Workflow { id:string; position:number; title:string; feature?:string; actor?:string; entrypoint:{ kind:EntrypointKind; label:string }; summary:string; steps:WorkflowStep[]; edges:WorkflowEdge[] }
 export type AnalysisStatus = 'draft'|'ready';

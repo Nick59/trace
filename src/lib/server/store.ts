@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Analysis, AnalysisSource, AnalysisStatus, PullRequestSnapshot, UnassignedFile, Workflow } from '../types';
-import { coverageError, testStepMessage, testStepPath, validUnassigned, validWorkflow, validWorkflows } from './workflows';
+import { coverageError, patchesOf, rangeError, testStepMessage, testStepPath, validUnassigned, validWorkflow, validWorkflows } from './workflows';
 
 export interface AnalysisSummary { id: string; title: string; repository: string; number: number; headSha: string; status: AnalysisStatus; source: AnalysisSource | null; workflowCount: number; updatedAt: string }
 
@@ -148,7 +148,10 @@ export function submitWorkflows(id: string, headSha: string, workflows: unknown,
   const changed = new Set(existing.pr.files.map((file) => file.path));
   const testPath = testStepPath(workflows);
   if (testPath) throw new Error(testStepMessage(testPath));
-  const valid = validWorkflows(workflows, changed, true);
+  const patches = patchesOf(existing.pr);
+  const rangeProblem = rangeError(workflows, patches);
+  if (rangeProblem) throw new Error(rangeProblem);
+  const valid = validWorkflows(workflows, changed, true, patches);
   if (!valid) throw new Error('Workflows are invalid, have no feature or actor, use legacy paths, or refer to unknown paths.');
   const unassigned = validUnassigned(unassignedInput, changed);
   if (!unassigned) throw new Error('Unassigned files are invalid: each needs a changed file path once and a reason.');
@@ -186,7 +189,10 @@ export function replaceWorkflow(analysisId: string, workflowId: string, headSha:
   if (headSha !== existing.headSha) throw new Error('Head SHA does not match this analysis.');
   const testPath = testStepPath(workflow);
   if (testPath) throw new Error(testStepMessage(testPath));
-  const valid = validWorkflow(workflow, new Set(existing.pr.files.map((file) => file.path)), current.position, true);
+  const patches = patchesOf(existing.pr);
+  const rangeProblem = rangeError(workflow, patches);
+  if (rangeProblem) throw new Error(rangeProblem);
+  const valid = validWorkflow(workflow, new Set(existing.pr.files.map((file) => file.path)), current.position, true, patches);
   if (!valid) throw new Error('Workflow is invalid, has no feature or actor, uses legacy paths, or refers to unknown paths.');
   const workflows = existing.workflows.map((candidate) => candidate.id === workflowId ? valid : candidate);
   const gap = coverageError(existing, { pr: existing.pr, workflows, unassigned: existing.unassigned });

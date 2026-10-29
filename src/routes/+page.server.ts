@@ -1,13 +1,16 @@
-import { analysisHistory } from '$lib/server/pr-page';
+import { analysisHistory, setupCommands } from '$lib/server/pr-page';
+import { codexMcpRegistered, codexSkillInstalled, mcpRegistered, skillInstalled } from '$lib/server/skill';
 
 export function load() {
-  const configured = (value: string | undefined) => Boolean(value?.trim() && !value.includes('replace_me'));
   const history = analysisHistory();
-  const reviews: Record<string, { workflowsViewed: number; workflows: number }> = {};
-  for (const entry of history) {
-    if (entry.status === 'ready' && entry.review.workflows > 0) {
-      reviews[`${entry.repository.toLowerCase()}#${entry.number}`] = { workflowsViewed: entry.review.workflowsViewed, workflows: entry.review.workflows };
+  const setup = {
+    commands: setupCommands(),
+    steps: {
+      claude: { mcp: mcpRegistered(), skill: skillInstalled() },
+      codex: { mcp: codexMcpRegistered(), skill: codexSkillInstalled() },
+      appUrl: Boolean(process.env.TRACE_APP_URL?.trim()),
+      analyzed: history.length > 0
     }
-  }
-  return { setup: { githubConfigured: configured(process.env.GITHUB_TOKEN) }, history, reviews };
+  };
+  return { setup, history };
 }

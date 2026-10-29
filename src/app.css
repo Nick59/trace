@@ -102,6 +102,7 @@ pre, code, kbd { font-family: var(--fm); }
 .panel-cyan { --p-accent: var(--a-cyan); }
 .panel-violet { --p-accent: var(--a-violet); }
 .panel-green { --p-accent: var(--a-green); }
+.panel-warning { --p-accent: var(--warning); }
 .panel-blue { --p-accent: var(--a-blue); }
 .panel-head {
   display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 0 12px;
