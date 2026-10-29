@@ -23,3 +23,11 @@ export function nextWorkflow(order: WorkflowProgress[], currentId: string): Work
   }
   return null;
 }
+
+export type StepState = 'viewed' | 'skipped' | 'none';
+
+/** Viewed wins over skipped, so marking a skipped step with Space turns it green. */
+export function stepState(id: string, viewedIds: string[], skippedIds: string[]): StepState {
+  if (viewedIds.includes(id)) return 'viewed';
+  return skippedIds.includes(id) ? 'skipped' : 'none';
+}

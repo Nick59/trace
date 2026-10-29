@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleCheck, ExternalLink, PartyPopper, RefreshCw } from '@lucide/svelte';
-  import { goto } from '$app/navigation';
+  import { beforeNavigate, goto } from '$app/navigation';
   import { page } from '$app/state';
   import { fly } from 'svelte/transition';
   import { motionMs } from '$lib/kinds';
@@ -9,8 +9,8 @@
   import KindBadge from '$lib/components/KindBadge.svelte';
   import ReviewDiff from '$lib/components/ReviewDiff.svelte';
   import { graphNav, type GraphNav, type NavMemory } from '$lib/graph-nav';
-  import { navHints } from '$lib/nav-state.svelte';
-  import { nextUnviewedStep, nextWorkflow, progressOf, type WorkflowProgress } from '$lib/viewed';
+  import { loadSkipped, navHints, setSkipped, skippedIdsFor } from '$lib/nav-state.svelte';
+  import { nextUnviewedStep, nextWorkflow, progressOf, stepState, type WorkflowProgress } from '$lib/viewed';
   import StepNav from '$lib/components/StepNav.svelte';
   import WorkflowGraph from '$lib/components/WorkflowGraph.svelte';
   import { ResizableHandle, ResizablePane, ResizablePaneGroup } from '$lib/components/ui/resizable';
@@ -130,6 +130,14 @@
   let progress = $derived(progressOf(stepPaths, viewed));
   let viewedIds = $derived(data.workflow.steps.filter((step) => viewed.has(step.path)).map((step) => step.id));
   let isViewed = $derived(viewed.has(data.step.path));
+  let skippedKey = $derived(`${data.prPath}/${data.workflow.id}`);
+  $effect(() => { loadSkipped(skippedKey); });
+  let skippedIds = $derived(data.workflow.steps.filter((step) => stepState(step.id, viewedIds, skippedIdsFor(skippedKey)) === 'skipped').map((step) => step.id));
+  // Leaving a step by any route other than Space (which marks it viewed first) counts as skipping it.
+  beforeNavigate(({ from, to, type }) => {
+    if (type === 'leave' || !from || !to || from.url.pathname === to.url.pathname) return;
+    if (!viewed.has(data.step.path)) setSkipped(skippedKey, data.step.id, true);
+  });
   let viewError = $state('');
 
   async function setViewed(stepPath: string, on: boolean): Promise<boolean> {
@@ -207,7 +215,7 @@
     consume(event);
     swallowSpace = true;
     if (event.repeat) return;
-    if (event.shiftKey) { cancel(); void setViewed(data.step.path, false); return; }
+    if (event.shiftKey) { cancel(); setSkipped(skippedKey, data.step.id, true); void setViewed(data.step.path, false); return; }
     if (!completion) void markAndAdvance();
   }
   // A focused button clicks on Space keyup, so that event is swallowed too.
@@ -254,7 +262,7 @@
     </div>
     <div class="order-1 shrink-0 px-3 pt-2 pb-1.5" style="border-bottom: 1px solid color-mix(in srgb, var(--a-cyan) 14%, var(--line))">
       <div class="flex items-center justify-between font-mono text-[11px] text-muted-foreground">
-        <span>{progress.viewed}/{progress.total} viewed</span>
+        <span>{progress.viewed}/{progress.total} viewed{#if skippedIds.length}{' · '}<span style="color: var(--warning)">{skippedIds.length} skipped</span>{/if}</span>
         {#if progress.viewed === progress.total}<span class="inline-flex items-center gap-1" style="color: var(--a-green)"><Check size={12} aria-hidden="true" />reviewed</span>{/if}
       </div>
       <div class="mt-1 h-1 overflow-hidden rounded-full" style="background: color-mix(in srgb, var(--a-green) 14%, var(--line))" role="progressbar" aria-label="Steps viewed" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.viewed}>
@@ -262,7 +270,7 @@
       </div>
     </div>
     <div id="step-graph" class="order-3 min-h-0 {inPane ? 'flex-1' : `h-[45dvh] lg:order-2 lg:h-auto lg:flex-1 ${graphOpen ? 'block' : 'hidden lg:block'}`}">
-      <WorkflowGraph bind:zoom source={data.mermaid} {kind} currentId={data.step.id} {steps} {base} onSelect={(n) => goto(`${base}/${n}`, { reset: false })} markIds={marked} {viewedIds} onrendered={() => graphVersion++} />
+      <WorkflowGraph bind:zoom source={data.mermaid} {kind} currentId={data.step.id} {steps} {base} onSelect={(n) => goto(`${base}/${n}`, { reset: false })} markIds={marked} {viewedIds} {skippedIds} onrendered={() => graphVersion++} />
     </div>
     <div class="order-2 shrink-0 border-t px-3 py-2 lg:order-3" style="border-color: color-mix(in srgb, var(--a-cyan) 22%, var(--line))">
       <StepNav {base} stepNumber={data.stepNumber} stepCount={data.stepCount} prev={data.prev} next={data.next} backHref={data.prPath} />

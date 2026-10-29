@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { kindHex, motionMs } from '$lib/kinds';
+  import { stepState } from '$lib/viewed';
   import type { EntrypointKind } from '$lib/types';
 
   type Step = { id: string; title: string };
-  let { source, currentId, steps, base, kind = 'other', zoom = $bindable('fit'), onSelect, markIds = [], viewedIds = [], onrendered }: {
-    markIds?: string[]; viewedIds?: string[]; onrendered?: () => void;
+  let { source, currentId, steps, base, kind = 'other', zoom = $bindable('fit'), onSelect, markIds = [], viewedIds = [], skippedIds = [], onrendered }: {
+    markIds?: string[]; viewedIds?: string[]; skippedIds?: string[]; onrendered?: () => void;
     zoom?: 'fit' | '1:1'; source: string; kind?: EntrypointKind; currentId: string; steps: Step[]; base: string; onSelect: (stepNumber: number) => void;
   } = $props();
 
@@ -56,7 +57,7 @@
       applyZoom();
       highlight(true);
       markSiblings();
-      markViewed();
+      markStates();
       onrendered?.();
     } catch {
       if (token === renderCount) status = 'failed';
@@ -128,7 +129,6 @@
     for (const [node, index] of nodeElements()) {
       const active = index === current;
       node.classList.toggle('trace-current', active);
-      node.classList.toggle('trace-visited', index < current);
       node.classList.toggle('trace-upcoming', index > current);
       if (active) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
       if (active) reveal(node, instant);
@@ -143,52 +143,21 @@
     for (const [node, index] of nodeElements()) node.classList.toggle('trace-sibling', markIds.includes(steps[index].id));
   }
 
-  const SVG = 'http://www.w3.org/2000/svg';
-  // g.node is translated to the node centre, so the shape's bbox is centre-relative. While the container is display:none (first render, collapsed pane) getBBox returns zeros, so the badge stays hidden until a later pass can measure it.
-  function placeBadge(node: SVGGElement, badge: SVGGElement) {
-    const shape = node.querySelector<SVGGraphicsElement>('.label-container') ?? node.querySelector<SVGGraphicsElement>('rect, polygon, path');
-    const box = shape?.getBBox();
-    const measured = !!box && box.width > 0 && box.height > 0;
-    if (measured) badge.setAttribute('transform', `translate(${box.x + box.width - 2}, ${box.y + 2})`);
-    badge.setAttribute('visibility', measured ? 'visible' : 'hidden');
-    return measured;
-  }
-
-  function addBadge(node: SVGGElement) {
-    const badge = document.createElementNS(SVG, 'g');
-    badge.setAttribute('class', 'trace-badge');
-    badge.setAttribute('aria-hidden', 'true');
-    const disc = document.createElementNS(SVG, 'circle');
-    disc.setAttribute('r', '7');
-    const tick = document.createElementNS(SVG, 'path');
-    tick.setAttribute('d', 'M-3.5 0.2 L-1.2 2.6 L3.6 -2.4');
-    badge.append(disc, tick);
-    node.append(badge);
-    return badge;
-  }
-
-  let badgeFrame = 0;
-  function markViewed() {
-    let unmeasured = false;
+  function markStates() {
     for (const [node, index] of nodeElements()) {
-      const viewed = viewedIds.includes(steps[index].id);
-      node.classList.toggle('trace-viewed', viewed);
-      node.setAttribute('aria-label', `Step ${index + 1}: ${steps[index].title}${viewed ? ' (viewed)' : ''}`);
-      const badge = node.querySelector<SVGGElement>('.trace-badge');
-      if (viewed) {
-        if (!placeBadge(node, badge ?? addBadge(node))) unmeasured = true;
-      } else badge?.remove();
+      const step = steps[index];
+      const state = stepState(step.id, viewedIds, skippedIds);
+      node.classList.toggle('trace-viewed', state === 'viewed');
+      node.classList.toggle('trace-skipped', state === 'skipped');
+      node.setAttribute('aria-label', `Step ${index + 1}: ${step.title}${state === 'viewed' ? ' (viewed)' : state === 'skipped' ? ' (skipped)' : ''}`);
     }
-    cancelAnimationFrame(badgeFrame);
-    // A hidden container is retried by the ResizeObserver when it is shown; polling frames would never succeed.
-    if (unmeasured && (container?.clientHeight ?? 0) > 0) badgeFrame = requestAnimationFrame(() => { if (status === 'ready') markViewed(); });
   }
 
   onMount(() => {
     const onScheme = (event: MediaQueryListEvent) => (dark = event.matches);
     scheme?.addEventListener('change', onScheme);
     import('mermaid').then((module) => { mermaidModule = module.default; draw(); }).catch(() => (status = 'failed'));
-    return () => { renderCount++; cancelAnimationFrame(badgeFrame); scheme?.removeEventListener('change', onScheme); };
+    return () => { renderCount++; scheme?.removeEventListener('change', onScheme); };
   });
 
   $effect(() => { void source; void dark; draw(); });
@@ -199,7 +168,7 @@
     const observer = new ResizeObserver(() => {
       if (status === 'ready' && container && container.clientWidth !== width) { width = container.clientWidth; applyZoom(); }
       const now = (container?.clientHeight ?? 0) > 0;
-      if (now && !shown && status === 'ready') { highlight(true); markViewed(); }
+      if (now && !shown && status === 'ready') { highlight(true); markStates(); }
       shown = now;
     });
     observer.observe(container);
@@ -208,7 +177,7 @@
   $effect(() => { void zoom; if (status === 'ready') { applyZoom(); highlight(true); } });
   $effect(() => { void currentId; if (status === 'ready') highlight(); });
   $effect(() => { void markIds; if (status === 'ready') markSiblings(); });
-  $effect(() => { void viewedIds; if (status === 'ready') markViewed(); });
+  $effect(() => { void viewedIds; void skippedIds; if (status === 'ready') markStates(); });
 </script>
 
 {#if status === 'failed'}
@@ -239,8 +208,6 @@
   .graph :global(g.node:hover rect) { stroke: color-mix(in srgb, var(--k) 70%, var(--line)) !important; }
   .graph :global(g.node.trace-upcoming) { opacity: 0.5; }
   .graph :global(g.node.trace-upcoming:hover) { opacity: 0.85; }
-  .graph :global(g.node.trace-visited rect) { stroke: color-mix(in srgb, var(--k) 55%, var(--line)) !important; }
-  .graph :global(g.node.trace-visited .nodeLabel) { color: var(--muted-fg) !important; }
   .graph :global(g.node.trace-current rect),
   .graph :global(g.node.trace-current polygon),
   .graph :global(g.node.trace-current path) {
@@ -262,11 +229,17 @@
   .graph :global(.edgeLabel rect) { background: var(--canvas) !important; fill: var(--canvas) !important; color: var(--muted-fg) !important; font: 11px var(--fm) !important; }
   .graph :global(g.node.trace-viewed rect),
   .graph :global(g.node.trace-viewed polygon),
-  .graph :global(g.node.trace-viewed path) { stroke: color-mix(in srgb, var(--a-green) 65%, var(--line)) !important; fill: color-mix(in srgb, var(--canvas) 90%, var(--a-green)) !important; }
+  .graph :global(g.node.trace-viewed path) { stroke: color-mix(in srgb, var(--a-green) 75%, var(--line)) !important; fill: color-mix(in srgb, var(--canvas) 78%, var(--a-green)) !important; }
+  .graph :global(g.node.trace-skipped rect),
+  .graph :global(g.node.trace-skipped polygon),
+  .graph :global(g.node.trace-skipped path) { stroke: color-mix(in srgb, var(--warning) 75%, var(--line)) !important; fill: color-mix(in srgb, var(--canvas) 78%, var(--warning)) !important; }
   .graph :global(g.node.trace-viewed.trace-current rect),
-  .graph :global(g.node.trace-viewed.trace-current polygon) { stroke: var(--a-green) !important; }
-  .graph :global(g.node.trace-viewed.trace-upcoming) { opacity: 0.8; }
-  .graph :global(g.node .trace-badge circle) { fill: var(--a-green) !important; stroke: var(--canvas) !important; stroke-width: 1.5px !important; }
-  .graph :global(g.node.trace-viewed .trace-badge path) { fill: none !important; stroke: var(--canvas) !important; stroke-width: 1.8px !important; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: none !important; }
+  .graph :global(g.node.trace-viewed.trace-current polygon),
+  .graph :global(g.node.trace-viewed.trace-current path),
+  .graph :global(g.node.trace-skipped.trace-current rect),
+  .graph :global(g.node.trace-skipped.trace-current polygon),
+  .graph :global(g.node.trace-skipped.trace-current path) { stroke: var(--k) !important; }
+  .graph :global(g.node.trace-viewed.trace-upcoming),
+  .graph :global(g.node.trace-skipped.trace-upcoming) { opacity: 0.8; }
   .graph :global(g.node:focus-visible) { outline: 2px solid var(--ring); outline-offset: 2px; }
 </style>

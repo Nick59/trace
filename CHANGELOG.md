@@ -33,6 +33,7 @@
 - The app follows the system light or dark color scheme.
 
 ### Changed
+- Viewed steps now turn the workflow graph node green instead of showing a check mark, steps you leave without pressing Space turn amber (remembered for the browser tab), and the progress line shows "5/9 viewed · 2 skipped".
 - The status bar on a step page shows a labelled keyboard shortcut legend (flow, branch, viewed, unmark; Enter and Esc while the completion overlay is open), with labels dropped below 1280px and the legend hidden below 1024px.
 - Test files are ignored: they are never steps (a submission with a test step is rejected), they do not count toward coverage ("N test files ignored" is shown instead), and test steps in existing analyses are hidden.
 - The top bar is now identical and full-width on every page, and the bottom status bar only appears on pull request and step pages.

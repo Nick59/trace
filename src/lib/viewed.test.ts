@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nextUnviewedStep, nextWorkflow, progressOf, type WorkflowProgress } from './viewed';
+import { nextUnviewedStep, nextWorkflow, progressOf, stepState, type WorkflowProgress } from './viewed';
 
 const paths = ['a', 'b', 'c', 'd'];
 
@@ -27,4 +27,10 @@ test('nextWorkflow takes the next unfinished workflow in PR order and wraps arou
   assert.equal(nextWorkflow(order, 'w3')?.id, 'w2');
   assert.equal(nextWorkflow([entry('w1', null), entry('w2', null)], 'w1'), null);
   assert.equal(nextWorkflow([entry('w1', 1)], 'w1'), null);
+});
+
+test('stepState prefers viewed over skipped and is none for untouched steps', () => {
+  assert.equal(stepState('s1', ['s1'], ['s1']), 'viewed');
+  assert.equal(stepState('s2', ['s1'], ['s2']), 'skipped');
+  assert.equal(stepState('s3', ['s1'], ['s2']), 'none');
 });
