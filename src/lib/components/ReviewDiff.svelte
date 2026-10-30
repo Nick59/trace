@@ -1,10 +1,15 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import { ExternalLink, MessageSquarePlus } from '@lucide/svelte';
   import { hunkInRanges, parseHunks } from '$lib/diff-hunks';
-  import type { ReviewFile, StepRange } from '$lib/types';
+  import type { CommentSide, ReviewComment, ReviewFile, StepRange } from '$lib/types';
 
   interface OtherUse { workflowId: string; title: string; step: number; ranges: StepRange[] }
-  let { file, ranges = [], otherUses = [], baseHref = '' }: { file?: ReviewFile; ranges?: StepRange[]; otherUses?: OtherUse[]; baseHref?: string } = $props();
+  let { file, ranges = [], otherUses = [], baseHref = '', commentsApi = '', canComment = false }: {
+    file?: ReviewFile; ranges?: StepRange[]; otherUses?: OtherUse[]; baseHref?: string; commentsApi?: string; canComment?: boolean;
+  } = $props();
+  type Target = { side: CommentSide; line: number; hunk: number };
+  type Draft = { side: CommentSide; line: number; startLine?: number; hunk: number } | { file: true };
   type DiffLine = { kind: 'context' | 'add' | 'remove' | 'meta'; oldNo: string; newNo: string; text: string; hunk: number };
   type Segment = { key: number; inRange: boolean; lines: DiffLine[]; uses: OtherUse[]; count: number };
   let lines = $derived(parsePatch(file?.patch ?? ''));
@@ -14,6 +19,90 @@
   let expanded = $state(new Set<number>());
   let region: HTMLElement | undefined = $state();
   let regionWidth = $state(0);
+  let comments = $state<ReviewComment[]>([]);
+  let commentsError = $state('');
+  let draft = $state<Draft | null>(null);
+  let draftText = $state('');
+  let posting = $state(false);
+  let postError = $state('');
+  let threads = $derived(groupThreads(comments));
+  let looseComments = $derived(comments.filter((comment) => comment.line === null));
+
+  const keyOf = (side: CommentSide, line: number) => `${side}:${line}`;
+
+  function groupThreads(list: ReviewComment[]): Map<string, ReviewComment[]> {
+    const map = new Map<string, ReviewComment[]>();
+    for (const comment of list) {
+      if (comment.line === null) continue;
+      const key = keyOf(comment.side, comment.line);
+      map.set(key, [...(map.get(key) ?? []), comment]);
+    }
+    return map;
+  }
+
+  function targetOf(line: DiffLine): Target | null {
+    if (line.kind === 'meta') return null;
+    return line.kind === 'remove' ? { side: 'LEFT', line: Number(line.oldNo), hunk: line.hunk } : { side: 'RIGHT', line: Number(line.newNo), hunk: line.hunk };
+  }
+
+  function inDraft(target: Target | null): boolean {
+    if (!target || !draft || 'file' in draft || draft.side !== target.side) return false;
+    return target.line <= draft.line && target.line >= (draft.startLine ?? draft.line);
+  }
+
+  $effect(() => {
+    const path = file?.path;
+    draft = null; draftText = ''; postError = ''; comments = []; commentsError = '';
+    if (!path || !commentsApi) return;
+    let alive = true;
+    fetch(`${commentsApi}?path=${encodeURIComponent(path)}`)
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!alive) return;
+        if (response.ok) comments = body.comments ?? [];
+        else commentsError = body.error ?? `Could not load GitHub comments (${response.status}).`;
+      })
+      .catch(() => { if (alive) commentsError = 'Could not load GitHub comments.'; });
+    return () => { alive = false; };
+  });
+
+  function startComment(target: Target, event: MouseEvent) {
+    postError = '';
+    if (event.shiftKey && draft && !('file' in draft) && draft.side === target.side && draft.hunk === target.hunk && target.line !== draft.line) {
+      const anchor = draft.startLine ?? draft.line;
+      const [low, high] = [Math.min(anchor, target.line, draft.line), Math.max(anchor, target.line, draft.line)];
+      draft = { side: target.side, line: high, startLine: low, hunk: target.hunk };
+      return;
+    }
+    draft = { side: target.side, line: target.line, hunk: target.hunk };
+  }
+
+  function cancelDraft() { draft = null; draftText = ''; postError = ''; }
+
+  async function submit() {
+    if (!draft || !file || posting || !draftText.trim()) return;
+    posting = true; postError = '';
+    const payload = 'file' in draft ? { path: file.path, body: draftText }
+      : { path: file.path, body: draftText, side: draft.side, line: draft.line, ...(draft.startLine === undefined ? {} : { startLine: draft.startLine }) };
+    try {
+      const response = await fetch(commentsApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) { postError = body.error ?? `GitHub did not accept the comment (${response.status}).`; return; }
+      comments = [...comments, body.comment];
+      cancelDraft();
+    } catch {
+      postError = 'Could not reach the server.';
+    } finally {
+      posting = false;
+    }
+  }
+
+  function composerKey(event: KeyboardEvent) {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelDraft(); }
+  }
+
+  const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
   function segment(): Segment[] {
     const inRange = hunks.map((hunk) => hunkInRanges(hunk, ranges));
@@ -69,18 +158,84 @@
 
 </script>
 
+{#snippet commentList(list: ReviewComment[])}
+  {#each list as comment (comment.id)}
+    <article class="comment" class:reply={comment.replyTo !== null}>
+      <header>
+        <span class="font-semibold text-foreground">{comment.author}</span>
+        <time datetime={comment.createdAt}>{when(comment.createdAt)}</time>
+        {#if comment.startLine !== null && comment.line !== null}<span>lines {comment.startLine}–{comment.line}</span>{/if}
+        <a href={comment.url} target="_blank" rel="noreferrer" class="ml-auto inline-flex items-center gap-1">GitHub<ExternalLink size={11} aria-hidden="true" /></a>
+      </header>
+      <p>{comment.body}</p>
+    </article>
+  {/each}
+{/snippet}
+
+{#snippet composer()}
+  <form class="composer" onsubmit={(event) => { event.preventDefault(); submit(); }}>
+    <label class="text-muted-foreground" for="trace-comment">
+      {#if draft && 'file' in draft}Comment on this file
+      {:else if draft && draft.startLine !== undefined}Comment on lines {draft.startLine}–{draft.line} ({draft.side === 'LEFT' ? 'old' : 'new'})
+      {:else if draft}Comment on line {draft.line} ({draft.side === 'LEFT' ? 'old' : 'new'}) <span class="opacity-75">· shift-click another line to select a range</span>{/if}
+    </label>
+    <!-- svelte-ignore a11y_autofocus: the composer opens on an explicit click -->
+    <textarea id="trace-comment" bind:value={draftText} onkeydown={composerKey} rows="3" maxlength="65536" placeholder="Leave a comment (Markdown)" autofocus disabled={posting}></textarea>
+    {#if postError}<p class="error" role="alert">{postError}</p>{/if}
+    <div class="flex items-center gap-2">
+      <span class="mr-auto text-muted-foreground">Posts to the pull request on GitHub · Ctrl+Enter</span>
+      <button type="button" class="btn" onclick={cancelDraft} disabled={posting}>Cancel</button>
+      <button type="submit" class="btn primary" disabled={posting || !draftText.trim()}>{posting ? 'Posting…' : 'Comment'}</button>
+    </div>
+  </form>
+{/snippet}
+
 {#snippet row(line: DiffLine)}
-  <div class="row {line.kind}">
+  {@const target = targetOf(line)}
+  <div class="row {line.kind}" class:selected={inDraft(target)}>
     {#if line.kind === 'meta'}
       <span class="hunk">{line.text}</span>
     {:else}
       <span class="gut">{line.oldNo}</span>
       <span class="gut">{line.newNo}</span>
-      <span class="sign">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span>
+      <span class="sign">
+        {#if canComment && target}
+          <button type="button" class="add-comment" aria-label="Comment on line {target.line}" title="Comment (shift-click to extend a range)" onclick={(event) => startComment(target, event)}>+</button>
+        {/if}
+        <span class="sign-mark">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span>
+      </span>
       <code class="code">{line.text}</code>
     {/if}
   </div>
+  {#if target}
+    {@const thread = threads.get(keyOf(target.side, target.line))}
+    {@const drafting = draft && !('file' in draft) && draft.side === target.side && draft.line === target.line}
+    {#if thread || drafting}
+      <div class="thread" style="--fold-w: {regionWidth}px">
+        {#if thread}{@render commentList(thread)}{/if}
+        {#if drafting}{@render composer()}{/if}
+      </div>
+    {/if}
+  {/if}
 {/snippet}
+
+{#if commentsApi}
+  <div class="file-comments">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-muted-foreground">
+        {#if commentsError}{commentsError}
+        {:else}{comments.length} GitHub {comments.length === 1 ? 'comment' : 'comments'} on this file{#if !canComment} · set GITHUB_TOKEN to comment{/if}{/if}
+      </span>
+      {#if canComment}
+        <button type="button" class="btn ml-auto inline-flex items-center gap-1" onclick={() => { postError = ''; draft = { file: true }; }}><MessageSquarePlus size={12} aria-hidden="true" />Comment on file</button>
+      {/if}
+    </div>
+    {#if looseComments.length}
+      <div class="mt-1">{@render commentList(looseComments)}</div>
+    {/if}
+    {#if draft && 'file' in draft}{@render composer()}{/if}
+  </div>
+{/if}
 
 {#if lines.length}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: a scrollable region must be focusable for keyboard scrolling -->
@@ -126,7 +281,28 @@
 <style>
   .row { display: grid; grid-template-columns: 44px 44px 18px 1fr; border-left: 3px solid transparent; }
   .gut { padding-right: 8px; text-align: right; font-size: 11.5px; color: var(--muted-fg); user-select: none; background: color-mix(in srgb, var(--neutral) 8%, transparent); }
-  .sign { text-align: center; user-select: none; }
+  .sign { position: relative; text-align: center; user-select: none; }
+  .add-comment { position: absolute; inset: 1px 0; display: none; place-items: center; border-radius: 3px; font-weight: 700; line-height: 1; color: var(--primary-foreground); background: var(--primary); cursor: pointer; }
+  .row:hover .add-comment, .add-comment:focus-visible { display: grid; }
+  .row:hover .sign-mark { visibility: hidden; }
+  .add-comment:focus-visible { outline: 2px solid var(--a-blue); outline-offset: 1px; }
+  .selected { box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--a-blue) 14%, transparent); }
+  .thread { position: sticky; left: 0; box-sizing: border-box; width: var(--fold-w); padding: 6px 12px 8px 50px; font-family: var(--font-sans); font-size: 12.5px; background: var(--color-card); border-block: 1px solid var(--color-border); }
+  .file-comments { padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--color-border); }
+  .comment { padding: 6px 0; border-top: 1px solid color-mix(in srgb, var(--neutral) 15%, transparent); }
+  .comment:first-child { border-top: 0; }
+  .comment.reply { margin-left: 16px; }
+  .comment header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; color: var(--muted-fg); font-size: 11.5px; }
+  .comment header a { color: var(--a-blue); }
+  .comment p { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
+  .composer { display: grid; gap: 6px; margin-top: 6px; font-size: 11.5px; }
+  .composer textarea { width: 100%; resize: vertical; min-height: 4.5rem; padding: 6px 8px; font: inherit; font-size: 12.5px; color: var(--fg); background: var(--color-background); border: 1px solid var(--color-border); border-radius: 6px; }
+  .composer textarea:focus-visible { outline: 2px solid var(--a-blue); outline-offset: 0; }
+  .error { color: var(--deletion-fg); }
+  .btn { padding: 2px 10px; border: 1px solid var(--color-border); border-radius: 6px; font-size: 12px; color: var(--fg); background: var(--color-background); cursor: pointer; }
+  .btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary) 50%, var(--color-border)); }
+  .btn.primary { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
+  .btn:disabled { opacity: 0.55; cursor: default; }
   .code { padding-right: 16px; white-space: pre; }
   .add { background: var(--addition-bg); border-left-color: var(--addition-bar); }
   .add .gut { background: var(--addition-gutter); color: var(--addition-fg); }

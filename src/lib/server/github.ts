@@ -1,4 +1,5 @@
-import type { PullRequestSnapshot, PullRequestSummary, ReviewFile } from '../types';
+import { createHash } from 'node:crypto';
+import type { CommentSide, NewReviewComment, PullRequestSnapshot, PullRequestSummary, ReviewComment, ReviewFile } from '../types';
 
 const API = 'https://api.github.com';
 const MAX_FILES = 300;
@@ -15,19 +16,38 @@ type GithubPull = {
 };
 type GithubFile = { filename: string; status: string; additions: number; deletions: number; patch?: string };
 
-async function github<T>(url: string, token?: string): Promise<T> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: {
+type GithubComment = {
+  id: number; body: string; html_url: string; created_at: string; path: string; commit_id: string; original_commit_id: string;
+  line: number | null; original_line: number | null; start_line: number | null; original_start_line: number | null;
+  side: CommentSide | null; subject_type?: 'line' | 'file'; in_reply_to_id?: number; user: { login: string } | null;
+};
+
+export class GithubError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
+async function github<T>(url: string, token?: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  const response = await fetch(url, { method: init.method, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
+    ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { Authorization: `Bearer ${token}` } : {})
-  } });
+  }, body: init.body === undefined ? undefined : JSON.stringify(init.body) });
   if (!response.ok) {
+    const detail = response.status === 422 ? await response.json().then((value: { message?: unknown; errors?: unknown }) =>
+      [value.message, JSON.stringify(value.errors ?? '')].filter((part) => typeof part === 'string' && part && part !== '""').join(' ').slice(0, 300)).catch(() => '') : '';
     const message = response.status === 404 ? 'Pull request or repository was not found.'
       : response.status === 401 || response.status === 403 ? 'GitHub denied access or rate limited this request.'
+      : response.status === 422 ? `GitHub rejected the request${detail ? `: ${detail}` : '.'}`
       : `GitHub request failed (${response.status}).`;
-    throw new Error(message);
+    throw new GithubError(message, response.status);
   }
   return response.json() as Promise<T>;
+}
+
+/** GitHub anchors each file of the "Files changed" tab with `#diff-` plus the SHA-256 of its path. */
+export function prFileUrl(prUrl: string, filePath: string): string {
+  return `${prUrl}/files#diff-${createHash('sha256').update(filePath).digest('hex')}`;
 }
 
 export function prCoordinates(input: string): { owner: string; repo: string; number: number; canonicalUrl: string } {
@@ -125,4 +145,37 @@ export async function getPullRequestSummary(owner: string, repo: string, number:
     title: pull.title, url: `https://github.com/${owner}/${repo}/pull/${number}`, repository: pull.base.repo.full_name, number: pull.number,
     author: pull.user?.login ?? 'unknown', base: pull.base.ref, head: pull.head.ref, headSha: pull.head.sha
   };
+}
+
+function toComment(raw: GithubComment, headSha: string): ReviewComment {
+  const current = raw.commit_id === headSha;
+  const original = !current && raw.original_commit_id === headSha;
+  const line = current ? raw.line : original ? raw.original_line : null;
+  const startLine = current ? raw.start_line : original ? raw.original_start_line : null;
+  return {
+    id: raw.id, author: raw.user?.login ?? 'unknown', body: raw.body, url: raw.html_url, createdAt: raw.created_at, path: raw.path,
+    side: raw.side ?? 'RIGHT', line: raw.subject_type === 'file' ? null : line, startLine: raw.subject_type === 'file' ? null : startLine,
+    file: raw.subject_type === 'file', replyTo: raw.in_reply_to_id ?? null
+  };
+}
+
+/** `line` is null when the comment targets the file or does not map onto `headSha`, the commit the stored diff shows. */
+export async function listReviewComments(owner: string, repo: string, number: number, filePath: string, headSha: string, token = process.env.GITHUB_TOKEN): Promise<ReviewComment[]> {
+  const result: ReviewComment[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const chunk = await github<GithubComment[]>(`${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}/comments?per_page=100&page=${page}`, token);
+    for (const raw of chunk) if (raw.path === filePath) result.push(toComment(raw, headSha));
+    if (chunk.length < 100) break;
+  }
+  return result;
+}
+
+export async function createReviewComment(owner: string, repo: string, number: number, headSha: string, comment: NewReviewComment, token = process.env.GITHUB_TOKEN): Promise<ReviewComment> {
+  const target = comment.line === undefined
+    ? { subject_type: 'file' }
+    : { line: comment.line, side: comment.side, ...(comment.startLine === undefined ? {} : { start_line: comment.startLine, start_side: comment.side }) };
+  const raw = await github<GithubComment>(`${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}/comments`, token, {
+    method: 'POST', body: { body: comment.body, commit_id: headSha, path: comment.path, ...target }
+  });
+  return toComment(raw, headSha);
 }

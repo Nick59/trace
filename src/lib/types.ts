@@ -10,3 +10,9 @@ export type AnalysisStatus = 'draft'|'ready';
 export type AnalysisSource = 'agent'|'api';
 export interface UnassignedFile { path:string; reason:string }
 export interface Analysis { id:string; repository:string; number:number; headSha:string; status:AnalysisStatus; source:AnalysisSource|null; pr:PullRequestSnapshot; workflows:Workflow[]; unassigned:UnassignedFile[]; createdAt:string; updatedAt:string }
+
+export type CommentSide = 'LEFT' | 'RIGHT';
+/** A GitHub pull request review comment. `line` is null for file comments and for comments that do not map onto the analyzed commit. */
+export interface ReviewComment { id: number; author: string; body: string; url: string; createdAt: string; path: string; side: CommentSide; line: number | null; startLine: number | null; file: boolean; replyTo: number | null }
+/** Without `line` the comment targets the whole file. */
+export interface NewReviewComment { path: string; body: string; side?: CommentSide; line?: number; startLine?: number }

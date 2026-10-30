@@ -19,3 +19,18 @@ export function hunkInRanges(hunk: Pick<Hunk, 'newStart' | 'newLines'>, ranges: 
   const end = hunk.newStart + Math.max(hunk.newLines, 1) - 1;
   return ranges.some((range) => range.from <= end && range.to >= hunk.newStart);
 }
+
+/** Line numbers a review comment can target: RIGHT holds new-side lines (added and context), LEFT holds removed lines. */
+export function commentableLines(patch: string): { LEFT: Set<number>; RIGHT: Set<number> } {
+  const result = { LEFT: new Set<number>(), RIGHT: new Set<number>() };
+  let oldLine = 0, newLine = 0, inHunk = false;
+  for (const text of patch.split('\n')) {
+    const match = HEADER.exec(text);
+    if (match) { oldLine = Number(match[1]); newLine = Number(match[3]); inHunk = true; continue; }
+    if (!inHunk) continue;
+    if (text.startsWith('+')) result.RIGHT.add(newLine++);
+    else if (text.startsWith('-')) result.LEFT.add(oldLine++);
+    else if (text.startsWith(' ')) { result.RIGHT.add(newLine++); oldLine++; }
+  }
+  return result;
+}
