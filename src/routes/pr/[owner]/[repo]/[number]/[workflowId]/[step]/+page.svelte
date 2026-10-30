@@ -21,7 +21,7 @@
   let steps = $derived(data.workflow.steps.map((step) => ({ id: step.id, title: step.title })));
   let current = $derived(data.files.find((file) => file.path === page.url.searchParams.get('file')) ?? data.files[0] ?? data.file);
   let currentPath = $derived(current?.path ?? data.step.path);
-  let fileUrl = $derived(current?.status === 'removed' ? `${data.pr.url}/files` : `https://github.com/${data.pr.repository}/blob/${data.pr.headSha}/${currentPath.split('/').map(encodeURIComponent).join('/')}`);
+  let fileUrl = $derived(data.githubFileUrls[currentPath] ?? `${data.pr.url}/files`);
   const fileHref = (index: number) => index === 0 ? page.url.pathname : `?file=${encodeURIComponent(data.files[index].path)}`;
   let graphOpen = $state(false);
   let zoom = $state<'fit' | '1:1'>('fit');
@@ -355,7 +355,7 @@
           <span class="dim hidden sm:inline">{current.status}</span>
           <span style="color: var(--addition-fg)">+{current.additions}</span><span style="color: var(--deletion-fg)">−{current.deletions}</span>
         {/if}
-        <a href={fileUrl} target="_blank" rel="noreferrer" class="inline-flex shrink-0 items-center gap-1 normal-case tracking-normal text-primary hover:underline" aria-label="View on GitHub">GitHub<ExternalLink size={12} aria-hidden="true" /></a>
+        <a href={fileUrl} target="_blank" rel="noreferrer" class="inline-flex shrink-0 items-center gap-1 normal-case tracking-normal text-primary hover:underline" aria-label="View this file in the pull request on GitHub">GitHub<ExternalLink size={12} aria-hidden="true" /></a>
       </div>
       {#if data.files.length > 1}
         <div class="file-tabs" role="tablist" aria-label="Files in this step">
@@ -367,7 +367,7 @@
           {/each}
         </div>
       {/if}
-      <ReviewDiff file={current} ranges={current?.path === data.step.path ? data.step.ranges ?? [] : []} otherUses={data.otherUses} baseHref="/pr/{data.params.owner}/{data.params.repo}/{data.params.number}" />
+      <ReviewDiff file={current} ranges={current?.path === data.step.path ? data.step.ranges ?? [] : []} otherUses={data.otherUses} baseHref="/pr/{data.params.owner}/{data.params.repo}/{data.params.number}" commentsApi="/api{data.prPath}/comments" canComment={data.canComment} />
     </section>
   {/key}
 {/snippet}
