@@ -23,14 +23,22 @@
   --destructive: light-dark(#cf222e, #ff7b72);
   --warning: light-dark(#9a6700, #d29922);
 
-  --addition-bg: light-dark(#e6f6ea, rgba(46, 160, 67, 0.13));
-  --addition-gutter: light-dark(#ccefd5, rgba(46, 160, 67, 0.22));
+  --addition-bg: light-dark(#f3fbf5, rgba(46, 160, 67, 0.06));
+  --addition-gutter: light-dark(#dff4e5, rgba(46, 160, 67, 0.14));
   --addition-fg: light-dark(#116329, #7ee787);
   --addition-bar: light-dark(#2da44e, #3fb950);
   --deletion-bg: light-dark(#ffeceb, rgba(248, 81, 73, 0.13));
   --deletion-gutter: light-dark(#ffd7d5, rgba(248, 81, 73, 0.22));
   --deletion-fg: light-dark(#a40e26, #ffa198);
   --deletion-bar: light-dark(#cf222e, #f85149);
+
+  --syn-keyword: light-dark(#cf222e, #ff7b72);
+  --syn-title: light-dark(#8250df, #d2a8ff);
+  --syn-string: light-dark(#0a3069, #a5d6ff);
+  --syn-constant: light-dark(#0550ae, #79c0ff);
+  --syn-type: light-dark(#953800, #ffa657);
+  --syn-comment: light-dark(#6e7781, #8b949e);
+  --syn-tag: light-dark(#116329, #7ee787);
 
   --kind-http: light-dark(#0e7490, #22d3ee);
   --kind-cli: light-dark(#b45309, #fbbf24);

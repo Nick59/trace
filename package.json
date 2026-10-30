@@ -18,6 +18,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "bits-ui": "latest",
     "clsx": "latest",
+    "highlight.js": "^11.11.1",
     "mermaid": "12.2.0",
     "tailwind-merge": "latest",
     "tailwind-variants": "^3.3.1",

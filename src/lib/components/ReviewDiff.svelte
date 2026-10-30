@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { ExternalLink, MessageSquarePlus } from '@lucide/svelte';
   import { hunkInRanges, parseHunks } from '$lib/diff-hunks';
+  import { highlightLines, languageFor } from '$lib/highlight';
   import type { CommentSide, ReviewComment, ReviewFile, StepRange } from '$lib/types';
 
   interface OtherUse { workflowId: string; title: string; step: number; ranges: StepRange[] }
@@ -10,9 +11,9 @@
   } = $props();
   type Target = { side: CommentSide; line: number; hunk: number };
   type Draft = { side: CommentSide; line: number; startLine?: number; hunk: number } | { file: true };
-  type DiffLine = { kind: 'context' | 'add' | 'remove' | 'meta'; oldNo: string; newNo: string; text: string; hunk: number };
+  type DiffLine = { kind: 'context' | 'add' | 'remove' | 'meta'; oldNo: string; newNo: string; text: string; hunk: number; html: string };
   type Segment = { key: number; inRange: boolean; lines: DiffLine[]; uses: OtherUse[]; count: number };
-  let lines = $derived(parsePatch(file?.patch ?? ''));
+  let lines = $derived(highlight(parsePatch(file?.patch ?? ''), languageFor(file?.path ?? '')));
   let hunks = $derived(parseHunks(file?.patch ?? ''));
   let focused = $derived(ranges.length > 0 && hunks.some((hunk) => hunkInRanges(hunk, ranges)));
   let segments = $derived(focused ? segment() : []);
@@ -141,17 +142,33 @@
     expanded = next;
   }
 
+  // Each side of a hunk is highlighted as one block, so multi-line strings and comments keep their color.
+  function highlight(parsed: DiffLine[], language: string | undefined): DiffLine[] {
+    const sides = new Map<string, DiffLine[]>();
+    for (const line of parsed) {
+      if (line.kind === 'meta') continue;
+      const keys = line.kind === 'add' ? ['new'] : line.kind === 'remove' ? ['old'] : ['new', 'old'];
+      for (const key of keys) sides.set(`${line.hunk}:${key}`, [...(sides.get(`${line.hunk}:${key}`) ?? []), line]);
+    }
+    for (const [key, group] of sides) {
+      if (key.endsWith(':old') && !group.some((line) => line.kind === 'remove')) continue;
+      const html = highlightLines(group.map((line) => line.text), language);
+      group.forEach((line, index) => { if (key.endsWith(':new') || line.kind === 'remove') line.html = html[index]; });
+    }
+    return parsed;
+  }
+
   function parsePatch(patch: string): DiffLine[] {
     if (!patch) return [];
     const output: DiffLine[] = [];
     let oldLine = 0, newLine = 0, index = -1;
     for (const text of patch.split('\n')) {
       const hunk = text.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (hunk) { index++; oldLine = Number(hunk[1]); newLine = Number(hunk[2]); output.push({ kind: 'meta', oldNo: '', newNo: '', text, hunk: index }); continue; }
+      if (hunk) { index++; oldLine = Number(hunk[1]); newLine = Number(hunk[2]); output.push({ kind: 'meta', oldNo: '', newNo: '', text, hunk: index, html: '' }); continue; }
       if (text.startsWith('diff --git') || text.startsWith('index ') || text.startsWith('--- ') || text.startsWith('+++ ') || text.startsWith('\\')) continue;
-      if (text.startsWith('+')) output.push({ kind: 'add', oldNo: '', newNo: String(newLine++), text: text.slice(1), hunk: Math.max(index, 0) });
-      else if (text.startsWith('-')) output.push({ kind: 'remove', oldNo: String(oldLine++), newNo: '', text: text.slice(1), hunk: Math.max(index, 0) });
-      else if (text.startsWith(' ')) output.push({ kind: 'context', oldNo: String(oldLine++), newNo: String(newLine++), text: text.slice(1), hunk: Math.max(index, 0) });
+      if (text.startsWith('+')) output.push({ kind: 'add', oldNo: '', newNo: String(newLine++), text: text.slice(1), hunk: Math.max(index, 0), html: '' });
+      else if (text.startsWith('-')) output.push({ kind: 'remove', oldNo: String(oldLine++), newNo: '', text: text.slice(1), hunk: Math.max(index, 0), html: '' });
+      else if (text.startsWith(' ')) output.push({ kind: 'context', oldNo: String(oldLine++), newNo: String(newLine++), text: text.slice(1), hunk: Math.max(index, 0), html: '' });
     }
     return output;
   }
@@ -204,7 +221,8 @@
         {/if}
         <span class="sign-mark">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span>
       </span>
-      <code class="code">{line.text}</code>
+      <!-- html comes from highlightLines, which escapes the patch text -->
+      <code class="code">{@html line.html}</code>
     {/if}
   </div>
   {#if target}
@@ -321,4 +339,12 @@
   .fold-toggle:focus-visible, .fold-uses a:focus-visible { outline: 2px solid var(--a-blue); outline-offset: 1px; }
   .fold-uses a { color: var(--a-blue); text-decoration: underline; }
   .dim { opacity: 0.55; }
+  .code :global(.hljs-keyword), .code :global(.hljs-built_in.hljs-keyword), .code :global(.hljs-meta .hljs-keyword) { color: var(--syn-keyword); }
+  .code :global(.hljs-title), .code :global(.hljs-title.function_), .code :global(.hljs-title.class_) { color: var(--syn-title); }
+  .code :global(.hljs-string), .code :global(.hljs-regexp), .code :global(.hljs-template-tag) { color: var(--syn-string); }
+  .code :global(.hljs-number), .code :global(.hljs-literal), .code :global(.hljs-variable.constant_), .code :global(.hljs-attr), .code :global(.hljs-property) { color: var(--syn-constant); }
+  .code :global(.hljs-type), .code :global(.hljs-built_in), .code :global(.hljs-params), .code :global(.hljs-variable.language_) { color: var(--syn-type); }
+  .code :global(.hljs-comment), .code :global(.hljs-doctag), .code :global(.hljs-quote) { color: var(--syn-comment); font-style: italic; }
+  .code :global(.hljs-tag), .code :global(.hljs-name), .code :global(.hljs-selector-tag), .code :global(.hljs-selector-class) { color: var(--syn-tag); }
+  .code :global(.hljs-meta), .code :global(.hljs-subst) { color: var(--fg); }
 </style>
